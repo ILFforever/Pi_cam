@@ -70,7 +70,7 @@ def init_camera():
             display=None,
             buffer_count=2,
             queue=False,
-            transform=Transform(vflip=True)
+            transform=Transform(vflip=True, hflip=True)
         )
         
         picam2.configure(config)
@@ -143,7 +143,7 @@ def capture_photo(photo_type):
                     display=None,
                     buffer_count=2,
                     queue=False,
-                    transform=Transform(vflip=True)
+                    transform=Transform(vflip=True , hflip=True)
                 )
                 picam2.configure(config)
                 picam2.start()
@@ -164,7 +164,7 @@ def capture_photo(photo_type):
                     display=None,
                     buffer_count=2,
                     queue=False,
-                    transform=Transform(vflip=True)
+                    transform=Transform(vflip=True , hflip=True)
                 )
                 picam2.configure(config)
                 picam2.start()
@@ -184,7 +184,7 @@ def capture_photo(photo_type):
                     display=None,
                     buffer_count=2,
                     queue=False,
-                    transform=Transform(vflip=True)
+                    transform=Transform(vflip=True , hflip=True)
                 )
                 picam2.configure(config)
                 picam2.start()
@@ -437,7 +437,9 @@ def set_af_window():
         with camera_lock:
             if window_coords is None:
                 # Remove AF window (full frame)
-                picam2.set_controls({"AfWindows": []})
+                picam2.set_controls({"AfMode": 0})  # Temporarily disable
+                time.sleep(0.1)
+                picam2.set_controls({"AfMode": 2})  # Re-enable continuous
             else:
                 picam2.set_controls({"AfWindows": [window_coords]})
             time.sleep(0.1)
@@ -474,7 +476,41 @@ def save_all_settings():
         return jsonify({'success': True, 'settings_applied': len(data)})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
-    
+@app.route('/clear_all_photos', methods=['POST'])
+def clear_all_photos():
+    """Delete all photos from both folders"""
+    try:
+        deleted_count = 0
+        
+        # Clear normal photos
+        if os.path.exists(normal_photos_folder):
+            for filename in os.listdir(normal_photos_folder):
+                if filename.endswith('.jpg'):
+                    file_path = os.path.join(normal_photos_folder, filename)
+                    os.remove(file_path)
+                    deleted_count += 1
+        
+        # Clear high-res photos
+        if os.path.exists(highrez_photos_folder):
+            for filename in os.listdir(highrez_photos_folder):
+                if filename.endswith('.jpg'):
+                    file_path = os.path.join(highrez_photos_folder, filename)
+                    os.remove(file_path)
+                    deleted_count += 1
+        
+        return jsonify({
+            'success': True,
+            'deleted_count': deleted_count,
+            'normal_count': 0,
+            'highrez_count': 0
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+        
 if __name__ == '__main__':
     print("Initializing camera...")
     if init_camera():
