@@ -174,21 +174,47 @@ def background_dng_processor():
             raw_queue.task_done()  # Don't forget to mark as done even on error
 
 def simple_dng_capture():
-    """Ultra-simple DNG capture - exactly what the forums recommend"""
+    """Simple DNG + NPY capture - saves both formats immediately"""
     photo_num = get_next_photo_number()
     
-    # Direct DNG capture (from therealdavidp's recommendation)
+    # Create file paths
     jpg_file = f"photos/jpg/photo{photo_num:03d}.jpg"
     dng_file = f"photos/dng/photo{photo_num:03d}.dng"
+    npy_file = f"photos/raw/photo{photo_num:03d}.npy"
+    
+    start_time = time.time()
     
     request = picam2.capture_request()
     try:
-        request.save("main", jpg_file)      # Processed preview
-        request.save_dng(dng_file)          # Raw for your processing
+        # Save JPG and DNG (built-in Pi method - most reliable)
+        request.save("main", jpg_file)
+        request.save_dng(dng_file)
+        
+        # Also save raw array as NPY
+        raw_array = request.make_array("raw")
+        np.save(npy_file, raw_array)
+        
     finally:
         request.release()
     
-    return {'filename': f"photo{photo_num:03d}"}
+    capture_time = time.time() - start_time
+    
+    # Get file sizes
+    jpg_size = os.path.getsize(jpg_file) / 1024 / 1024 if os.path.exists(jpg_file) else 0
+    dng_size = os.path.getsize(dng_file) / 1024 / 1024 if os.path.exists(dng_file) else 0
+    npy_size = os.path.getsize(npy_file) / 1024 / 1024 if os.path.exists(npy_file) else 0
+    
+    print(f"✅ Photo {photo_num:03d}: JPG({jpg_size:.1f}MB) + DNG({dng_size:.1f}MB) + NPY({npy_size:.1f}MB) in {capture_time:.3f}s")
+    
+    return {
+        'success': True,
+        'photo_number': photo_num,
+        'filename': f"photo{photo_num:03d}",
+        'capture_time': f"{capture_time:.3f}s",
+        'jpg_size': f"{jpg_size:.1f}MB",
+        'dng_size': f"{dng_size:.1f}MB",
+        'npy_size': f"{npy_size:.1f}MB"
+    }
 
 def fast_capture_photo():
     """Ultra-fast raw capture - just grab the data and queue processing"""
