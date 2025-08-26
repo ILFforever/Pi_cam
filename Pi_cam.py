@@ -2,6 +2,7 @@
 """
 Web-based camera interface
 Access via browser: http://[pi-ip]:8000
+original code takes jpg only
 """
 
 from flask import Flask, render_template, jsonify, send_from_directory, request

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Capture raw images not working yet
+Capture raw images directly works but with some delays
 """
 
 from flask import Flask, render_template_string, jsonify
@@ -11,8 +11,6 @@ import os
 import threading
 import queue
 import numpy as np
-import cv2
-from PIL import Image
 import psutil  # Move this to top-level imports
 from datetime import datetime
 
@@ -53,195 +51,58 @@ def get_photo_count():
     dng_files = [f for f in os.listdir("photos/dng") if f.endswith(".dng")]
     return len(dng_files)
 
-def ultra_fast_capture(photo_num=None, save_format="png"):
-    """
-    Memory-optimized version for Pi Zero 2
-    Processes in chunks to avoid memory overflow
-    """
-    print(f"[DEBUG] Starting MEMORY-OPTIMIZED ultra_fast_capture - format: {save_format}")
-    
-    if photo_num is None:
-        photo_num = get_next_photo_number()
+def ultra_fast_dng_capture():
+    print("⚡ Ultra-fast DNG capture using raw stream")
 
-    npy_file = f"photos/raw/photo{photo_num:03d}.npy"
-    final_file = f"photos/processed/photo{photo_num:03d}.{save_format}"
-    
-    os.makedirs("photos/raw", exist_ok=True)
-    os.makedirs("photos/processed", exist_ok=True)
+    photo_num = get_next_photo_number()
+    dng_file = f"photos/dng/photo{photo_num:03d}.dng"
+    os.makedirs(os.path.dirname(dng_file), exist_ok=True)
+
+    print(f"[DEBUG] Next photo number: {photo_num}")
+    print(f"[DEBUG] Target DNG file: {dng_file}")
 
     start_time = time.time()
-
-    try:
-        # 1️⃣ Fast raw capture (same as before)
-        request = picam2.capture_request()
-        if request is None:
-            return {"success": False, "error": "Camera capture failed"}
-        
-        try:
-            raw_array = request.make_array("raw")
-            metadata = request.get_metadata()
-            
-            print(f"[DEBUG] Raw shape: {raw_array.shape} = {raw_array.shape[0] * raw_array.shape[1] / 1000000:.1f}MP")
-            
-            # Save raw immediately
-            raw_data = {
-                "raw": raw_array,
-                "metadata": metadata,
-                "timestamp": time.time(),
-                "photo_number": photo_num
-            }
-            np.save(npy_file, raw_data)
-            
-        finally:
-            request.release()
-
-        # 2️⃣ Memory-safe background processing
-        def background_process_memory_safe():
-            print(f"[BACKGROUND] Starting MEMORY-SAFE processing")
-            
-            try:
-                # Load raw data
-                data = np.load(npy_file, allow_pickle=True).item()
-                raw = data["raw"]
-                
-                print(f"[BACKGROUND] Raw loaded: {raw.shape}, {raw.dtype}")
-                
-                # Check if image is too large for Pi Zero 2
-                total_pixels = raw.shape[0] * raw.shape[1]
-                if total_pixels > 8000000:  # 8MP threshold
-                    print(f"[BACKGROUND] Image too large ({total_pixels/1000000:.1f}MP), downsampling...")
-                    
-                    # Downsample raw before demosaicing to save memory
-                    scale_factor = int(np.sqrt(total_pixels / 6000000))  # Target ~6MP
-                    if scale_factor > 1:
-                        raw = raw[::scale_factor, ::scale_factor]
-                        print(f"[BACKGROUND] Downsampled by {scale_factor}x to: {raw.shape}")
-                
-                # Convert to 16-bit for processing
-                if raw.dtype == np.uint8:
-                    raw_16 = raw.astype(np.uint16) * 256  # Scale 8-bit to 16-bit range
-                else:
-                    raw_16 = raw.astype(np.uint16)
-                
-                print(f"[BACKGROUND] Starting demosaicing on {raw_16.shape}...")
-                
-                # Demosaic to RGB
-                rgb = cv2.cvtColor(raw_16, cv2.COLOR_BAYER_RG2RGB)
-                print(f"[BACKGROUND] RGB shape: {rgb.shape}")
-                
-                # Convert directly to 8-bit (skip float32 to save memory)
-                print(f"[BACKGROUND] Converting to 8-bit (memory efficient)...")
-                rgb_8bit = (rgb / 256).astype(np.uint8)  # Simple 16→8 bit
-                
-                # Simple processing without float arrays
-                rgb_8bit = np.clip(rgb_8bit.astype(np.int16) * 110 // 100, 0, 255).astype(np.uint8)
-                
-                print(f"[BACKGROUND] Saving final image...")
-                
-                # Save final image
-                if save_format.lower() == "png":
-                    success = cv2.imwrite(final_file, cv2.cvtColor(rgb_8bit, cv2.COLOR_RGB2BGR))
-                else:
-                    success = cv2.imwrite(final_file, cv2.cvtColor(rgb_8bit, cv2.COLOR_RGB2BGR), 
-                                        [cv2.IMWRITE_JPEG_QUALITY, 90])
-
-                if success and os.path.exists(final_file):
-                    final_size = os.path.getsize(final_file) / (1024 * 1024)
-                    print(f"[BACKGROUND] ✅ Success! Final size: {final_size:.1f}MB")
-                else:
-                    print(f"[BACKGROUND] ❌ Failed to save final file")
-
-            except Exception as e:
-                print(f"[BACKGROUND ERROR] {e}")
-                import traceback
-                print(f"[BACKGROUND ERROR] {traceback.format_exc()}")
-
-        # Start memory-safe background processing
-        processing_thread = threading.Thread(target=background_process_memory_safe, daemon=True)
-        processing_thread.start()
-
-        capture_time = time.time() - start_time
-        npy_size = os.path.getsize(npy_file) / (1024 * 1024)
-
-        return {
-            "success": True,
-            "photo_number": photo_num,
-            "npy_file": npy_file,
-            "final_file": final_file,
-            "capture_time": f"{capture_time:.3f}s",
-            "npy_size": f"{npy_size:.1f}MB",
-            "processing": "memory_safe_background"
-        }
-
-    except Exception as e:
-        return {"success": False, "error": f"Capture failed: {str(e)}", "photo_number": photo_num}
-
-
-def convert_to_8bit_with_processing(rgb_16bit):
-    """
-    Convert 16-bit raw RGB to 8-bit with custom processing and debugging
-    """
-    print(f"[PROCESSING] Starting 8-bit conversion...")
-    print(f"[PROCESSING] Input shape: {rgb_16bit.shape}, dtype: {rgb_16bit.dtype}")
     
     try:
-        # Start with 16-bit RGB data
-        rgb_float = rgb_16bit.astype(np.float32)
-        print(f"[PROCESSING] Converted to float32 - range: {rgb_float.min():.1f} to {rgb_float.max():.1f}")
+        r = picam2.capture_request()
+        if r is None:
+            print("[ERROR] capture_request() returned None")
+            return {'success': False, 'error': "No capture request"}
         
-        # 1️⃣ Normalize to 0-1 range
-        max_val = rgb_float.max()
-        if max_val > 0:
-            rgb_normalized = rgb_float / max_val
-            print(f"[PROCESSING] Normalized by {max_val:.1f} - range: {rgb_normalized.min():.3f} to {rgb_normalized.max():.3f}")
-        else:
-            print(f"[PROCESSING ERROR] Max value is 0, using raw values")
-            rgb_normalized = rgb_float
-        
-        # 2️⃣ Apply custom processing
-        exposure_compensation = 1.1  # Slightly brighter
-        contrast = 1.05              # Slightly more contrasty
-        
-        print(f"[PROCESSING] Applying exposure compensation: {exposure_compensation}")
-        rgb_processed = np.clip(rgb_normalized * exposure_compensation, 0, 1)
-        
-        print(f"[PROCESSING] Applying contrast: {contrast}")
-        rgb_processed = np.clip(((rgb_processed - 0.5) * contrast) + 0.5, 0, 1)
-        
-        print(f"[PROCESSING] After processing - range: {rgb_processed.min():.3f} to {rgb_processed.max():.3f}")
-        
-        # 3️⃣ Convert to 8-bit
-        rgb_8bit = (rgb_processed * 255).astype(np.uint8)
-        print(f"[PROCESSING] Final 8-bit - range: {rgb_8bit.min()} to {rgb_8bit.max()}")
-        
-        return rgb_8bit
-        
+        print("[DEBUG] Capture request acquired")
+
+        # Save to fast tmpfs first
+        tmp = f"/dev/shm/photo{photo_num:03d}.dng"
+        r.save_dng(tmp)
+        r.release()
+        print(f"[DEBUG] Temp DNG saved to {tmp}")
+
+        # Write out in a background thread
+        with open(tmp, "rb") as f:
+            data = f.read()
+
+        def writer_thread_func(data, dest):
+            with open(dest, "wb") as out:
+                out.write(data)
+            print(f"[DEBUG] File flushed to {dest}")
+
+        th = threading.Thread(target=writer_thread_func, args=(data, dng_file))
+        th.daemon = True
+        th.start()
+
     except Exception as e:
-        print(f"[PROCESSING ERROR] Processing failed: {e}")
-        print(f"[PROCESSING] Using fallback simple conversion")
-        # Fallback: Simple 16→8 bit conversion
-        try:
-            fallback = (rgb_16bit / 256).astype(np.uint8)
-            print(f"[PROCESSING] Fallback successful - range: {fallback.min()} to {fallback.max()}")
-            return fallback
-        except Exception as e2:
-            print(f"[PROCESSING ERROR] Even fallback failed: {e2}")
-            # Last resort - return zeros
-            return np.zeros(rgb_16bit.shape[:2] + (3,), dtype=np.uint8)
+        print(f"[ERROR] Exception during capture: {e}")
+        return {'success': False, 'error': str(e)}
     
-def check_memory_usage():
-    """Check if we have enough memory for safe operation"""
-    try:
-        memory = psutil.virtual_memory()
-        available_mb = memory.available / 1024 / 1024
-        
-        # Pi Zero 2 has 512MB total, we want at least 100MB free
-        if available_mb < 100:
-            print(f"⚠️ Low memory warning: {available_mb:.1f}MB available")
-            return False
-        return True
-    except:
-        return True  # Assume OK if we can't check
+    capture_time = time.time() - start_time
+    
+    return {
+        'success': True,
+        'photo_number': photo_num,
+        'filename': f"photo{photo_num:03d}",
+        'filepath': dng_file,
+        'capture_time': f"{capture_time:.3f}s"
+    }
     
 def init_camera():
     """Initialize the Pi Camera for fast raw capture"""
@@ -271,7 +132,7 @@ def index():
 
 @app.route('/fast_capture', methods=['POST'])
 def fast_capture():
-    result = ultra_fast_capture()
+    result = ultra_fast_dng_capture()
     return jsonify(result)
 
 @app.route('/queue_status')
