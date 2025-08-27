@@ -470,6 +470,9 @@
       <div>
         High-Res Photos: <span id="highrez-count">{{ highrez_count }}</span>
       </div>
+      <div>
+        Raw DNG Photos: <span id="dng-count">{{ dng_count }}</span>
+      </div>
     </div>
 
     <div class="af-info">
@@ -677,6 +680,12 @@
         High-Res Photo<br />
         <small>(4608×2592)</small>
       </button>
+
+      <button class="button" onclick="takePhoto('dng')"
+        style="background: var(--fuji-medium-gray); color: var(--fuji-white);">
+        Raw DNG Photo<br />
+        <small>(4608×2592 RAW)</small>
+      </button>
     </div>
 
     <div>
@@ -702,33 +711,46 @@
 
     function takePhoto(type) {
       const statusDiv = document.getElementById("status");
+      let statusText = "";
+      let endpoint = "";
+
+      switch (type) {
+        case 'normal':
+          statusText = "Taking normal photo...";
+          endpoint = "/capture/normal";
+          break;
+        case 'highrez':
+          statusText = "Taking high-res photo...";
+          endpoint = "/capture/highrez";
+          break;
+        case 'dng':
+          statusText = "Taking raw DNG photo...";
+          endpoint = "/capture_dng";
+          break;
+      }
+
       statusDiv.className = "status info";
-      statusDiv.textContent =
-        type === "normal"
-          ? "Taking normal photo..."
-          : "Taking high-res photo...";
+      statusDiv.textContent = statusText;
       statusDiv.classList.remove("hidden");
 
-      fetch("/capture/" + type, { method: "POST" })
+      fetch(endpoint, { method: "POST" })
         .then((response) => response.json())
         .then((data) => {
           if (data.success) {
             statusDiv.className = "status success";
             statusDiv.textContent = `✅ ${data.filename} captured in ${data.time}s`;
 
-            // Update counters
+            // Update counters based on type
             if (type === "normal") {
-              document.getElementById("photo-count").textContent =
-                data.photo_count;
-            } else {
-              document.getElementById("highrez-count").textContent =
-                data.highrez_count;
+              document.getElementById("photo-count").textContent = data.photo_count;
+            } else if (type === "highrez") {
+              document.getElementById("highrez-count").textContent = data.highrez_count;
+            } else if (type === "dng") {
+              document.getElementById("dng-count").textContent = data.photo_number;
             }
 
             // Refresh gallery if visible
-            if (
-              !document.getElementById("gallery").classList.contains("hidden")
-            ) {
+            if (!document.getElementById("gallery").classList.contains("hidden")) {
               loadGallery();
             }
           } else {
@@ -801,7 +823,8 @@
       const confirmed = confirm(
         `⚠️ WARNING: This will permanently delete ALL ${totalPhotos} photos!\n\n` +
         `Normal photos: ${normalCount}\n` +
-        `High-res photos: ${highrezCount}\n\n` +
+        `High-res photos: ${highrezCount}\n` +
+        `Raw DNG photos: ${dngCount}\n\n` +
         `This action cannot be undone. Are you sure?`
       );
 
@@ -834,6 +857,7 @@
             // Update counters
             document.getElementById('photo-count').textContent = '0';
             document.getElementById('highrez-count').textContent = '0';
+            document.getElementById('dng-count').textContent = '0';
 
             // Clear gallery if visible
             const gallery = document.getElementById('gallery');
@@ -873,10 +897,9 @@
       fetch("/photo_counts")
         .then((response) => response.json())
         .then((data) => {
-          document.getElementById("photo-count").textContent =
-            data.normal_count;
-          document.getElementById("highrez-count").textContent =
-            data.highrez_count;
+          document.getElementById("photo-count").textContent = data.normal_count;
+          document.getElementById("highrez-count").textContent = data.highrez_count;
+          document.getElementById("dng-count").textContent = data.dng_count;
         })
         .catch((error) => {
           console.error("Failed to update photo counts:", error);

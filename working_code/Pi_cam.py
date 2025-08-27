@@ -11,6 +11,8 @@ from libcamera import Transform
 import time
 import os
 import threading
+import queue
+import psutil
 from datetime import datetime
 
 app = Flask(__name__)
@@ -21,9 +23,13 @@ photos_folder = "photos"
 normal_photos_folder = os.path.join(photos_folder, "normal")
 highrez_photos_folder = os.path.join(photos_folder, "highrez")
 camera_lock = threading.Lock()
+dng_queue = queue.Queue(maxsize=10)
+processing_active = True
 
-# Create photos folders
-for folder in [photos_folder, normal_photos_folder, highrez_photos_folder]:
+dng_photos_folder = os.path.join(photos_folder, "dng")
+processed_photos_folder = os.path.join(photos_folder, "processed")
+
+for folder in [photos_folder, normal_photos_folder, highrez_photos_folder, dng_photos_folder, processed_photos_folder]:
     if not os.path.exists(folder):
         os.makedirs(folder)
 
@@ -32,10 +38,11 @@ def get_photo_counts():
     try:
         normal_files = [f for f in os.listdir(normal_photos_folder) if f.endswith('.jpg')]
         highrez_files = [f for f in os.listdir(highrez_photos_folder) if f.endswith('.jpg')]
-        return len(normal_files), len(highrez_files)
+        dng_files = [f for f in os.listdir(dng_photos_folder) if f.endswith('.dng')]
+        return len(normal_files), len(highrez_files), len(dng_files)
     except Exception as e:
         print(f"Error counting photos: {e}")
-        return 0, 0
+        return 0, 0, 0
 
 def get_next_photo_number(folder_path, prefix):
     """Get the next photo number for a given folder and prefix"""
@@ -111,8 +118,8 @@ def init_camera():
             print(f"✓ AF State: {af_states.get(af_state, 'Unknown')} ({af_state})")
         
         # Print initial photo counts
-        normal_count, highrez_count = get_photo_counts()
-        print(f"✓ Existing photos - Normal: {normal_count}, High-res: {highrez_count}")
+        normal_count, highrez_count, dng_count = get_photo_counts()
+        print(f"✓ Existing photos - Normal: {normal_count}, High-res: {highrez_count}, DNG: {dng_count}")
         
         print("Camera initialized successfully")
         return True
@@ -122,10 +129,11 @@ def init_camera():
 
 @app.route('/')
 def index():
-    normal_count, highrez_count = get_photo_counts()
+    normal_count, highrez_count, dng_count = get_photo_counts()
     return render_template('index.html', 
                           photo_count=normal_count, 
-                          highrez_count=highrez_count)
+                          highrez_count=highrez_count,
+                          dng_count=dng_count)
 
 @app.route('/capture/<photo_type>', methods=['POST'])
 def capture_photo(photo_type):
@@ -195,14 +203,15 @@ def capture_photo(photo_type):
             capture_time = round(end_time - start_time, 3)
             
             # Get updated counts
-            normal_count, highrez_count = get_photo_counts()
+            normal_count, highrez_count, dng_count = get_photo_counts()
             
             return jsonify({
                 'success': True,
                 'filename': filename,
                 'time': capture_time,
                 'photo_count': normal_count,
-                'highrez_count': highrez_count
+                'highrez_count': highrez_count,
+                'dng_count': dng_count
             })
             
         except Exception as e:
@@ -210,7 +219,62 @@ def capture_photo(photo_type):
                 'success': False,
                 'error': str(e)
             })
-
+            
+@app.route('/capture_dng', methods=['POST'])
+def capture_dng():
+    global picam2
+    
+    with camera_lock:
+        try:
+            start_time = time.time()
+            
+            # Switch to full resolution for DNG
+            picam2.stop()
+            config = picam2.create_still_configuration(
+                raw={"size": (4608, 2592)},
+                buffer_count=3,
+                queue=False
+            )
+            picam2.configure(config)
+            picam2.start()
+            time.sleep(0.3)
+            
+            # Get next photo number and create filename
+            photo_num = get_next_photo_number(dng_photos_folder, "dng")
+            filename = f"dng{photo_num:03d}.dng"
+            filepath = os.path.join(dng_photos_folder, filename)
+            
+            # Capture DNG with background processing
+            picam2.capture_file(filepath, name="raw")
+            
+            # Switch back to normal resolution
+            picam2.stop()
+            config = picam2.create_still_configuration(
+                main={"size": (2304, 1296), "format": "RGB888"},
+                buffer_count=2,
+                queue=False,
+                transform=Transform(vflip=True, hflip=True)
+            )
+            picam2.configure(config)
+            picam2.start()
+            time.sleep(0.2)
+            
+            end_time = time.time()
+            capture_time = round(end_time - start_time, 3)
+            
+            return jsonify({
+                'success': True,
+                'filename': filename,
+                'time': capture_time,
+                'photo_number': photo_num
+            })
+            
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': str(e)
+            })
+            
 @app.route('/gallery')
 def gallery():
     try:
@@ -270,10 +334,11 @@ def serve_photo(filename):
 @app.route('/photo_counts')
 def photo_counts():
     """API endpoint to get current photo counts"""
-    normal_count, highrez_count = get_photo_counts()
+    normal_count, highrez_count, dng_count = get_photo_counts()
     return jsonify({
         'normal_count': normal_count,
-        'highrez_count': highrez_count
+        'highrez_count': highrez_count,
+        'dng_count': dng_count
     })
 
 @app.route('/af_status')
@@ -477,9 +542,10 @@ def save_all_settings():
         return jsonify({'success': True, 'settings_applied': len(data)})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
+    
 @app.route('/clear_all_photos', methods=['POST'])
 def clear_all_photos():
-    """Delete all photos from both folders"""
+    """Delete all photos from all folders"""
     try:
         deleted_count = 0
         
@@ -499,11 +565,20 @@ def clear_all_photos():
                     os.remove(file_path)
                     deleted_count += 1
         
+        # Clear DNG photos
+        if os.path.exists(dng_photos_folder):
+            for filename in os.listdir(dng_photos_folder):
+                if filename.endswith('.dng'):
+                    file_path = os.path.join(dng_photos_folder, filename)
+                    os.remove(file_path)
+                    deleted_count += 1
+        
         return jsonify({
             'success': True,
             'deleted_count': deleted_count,
             'normal_count': 0,
-            'highrez_count': 0
+            'highrez_count': 0,
+            'dng_count': 0
         })
         
     except Exception as e:
