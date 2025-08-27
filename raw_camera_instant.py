@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Capture raw images directly works but with some delays
+is this working?
 """
 
 from flask import Flask, render_template_string, jsonify
@@ -11,12 +12,11 @@ import os
 import threading
 import queue
 import numpy as np
-import psutil  # Move this to top-level imports
+import psutil
 from datetime import datetime
 
 app = Flask(__name__)
 
-# Setup folders
 os.makedirs("photos/jpg", exist_ok=True)
 os.makedirs("photos/raw", exist_ok=True)
 os.makedirs("photos/dng", exist_ok=True)
@@ -394,7 +394,7 @@ if __name__ == '__main__':
             print("Shutting down...")
         finally:
             processing_active = False
-            raw_queue.put(None)  # Signal background thread to stop
+            raw_queue.put(None)
             if picam2:
                 picam2.stop()
                 print("Camera stopped. Goodbye!")
