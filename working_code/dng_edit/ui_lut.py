@@ -2,6 +2,7 @@
 """
 Universal LUT Tuner with DearPyGui
 Create any film look with comprehensive tone and color controls
+Run on laptop to create luts
 """
 
 import numpy as np
