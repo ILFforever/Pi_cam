@@ -45,7 +45,7 @@ def test_background_dng():
             else:
                 print(f"File {filename} not yet created")
             
-            time.sleep(5)  # Wait before next capture
+            time.sleep(3)  # Wait before next capture
         
         print("\nWaiting 10s for background processing to complete...")
         time.sleep(10)
