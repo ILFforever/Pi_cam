@@ -1,392 +1,426 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DNG Camera Test</title>
     <style>
-        :root {
-            --fuji-red: #d62d20;
-            --fuji-black: #000000;
-            --fuji-white: #ffffff;
-            --fuji-light-gray: #f5f5f5;
-            --fuji-medium-gray: #666666;
-        }
+      :root {
+        --fuji-red: #d62d20;
+        --fuji-black: #000000;
+        --fuji-white: #ffffff;
+        --fuji-light-gray: #f5f5f5;
+        --fuji-medium-gray: #666666;
+      }
 
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
 
-        body {
-            font-family: 'Helvetica Neue', Arial, sans-serif;
-            background: linear-gradient(135deg, var(--fuji-light-gray), var(--fuji-white));
-            color: var(--fuji-black);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
+      body {
+        font-family: "Helvetica Neue", Arial, sans-serif;
+        background: linear-gradient(
+          135deg,
+          var(--fuji-light-gray),
+          var(--fuji-white)
+        );
+        color: var(--fuji-black);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+      
+      .file-item a:hover {
+        text-decoration: underline !important;
+        color: #b91c1c;
+      }
+      .container {
+        background: var(--fuji-white);
+        padding: 40px;
+        border-radius: 12px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+        text-align: center;
+        max-width: 500px;
+        width: 100%;
+      }
 
-        .container {
-            background: var(--fuji-white);
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
-            text-align: center;
-            max-width: 500px;
-            width: 100%;
-        }
+      h1 {
+        color: var(--fuji-red);
+        margin-bottom: 30px;
+        font-size: 2.5em;
+        font-weight: 300;
+      }
 
-        h1 {
-            color: var(--fuji-red);
-            margin-bottom: 30px;
-            font-size: 2.5em;
-            font-weight: 300;
-        }
+      .status {
+        background: var(--fuji-light-gray);
+        padding: 20px;
+        border-radius: 8px;
+        margin-bottom: 30px;
+      }
 
-        .status {
-            background: var(--fuji-light-gray);
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 30px;
-        }
+      .memory-info {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 15px;
+        font-size: 14px;
+      }
 
-        .memory-info {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 15px;
-            font-size: 14px;
-        }
+      .memory-bar {
+        width: 100%;
+        height: 20px;
+        background: #e0e0e0;
+        border-radius: 10px;
+        overflow: hidden;
+        margin-bottom: 10px;
+      }
 
-        .memory-bar {
-            width: 100%;
-            height: 20px;
-            background: #e0e0e0;
-            border-radius: 10px;
-            overflow: hidden;
-            margin-bottom: 10px;
-        }
+      .memory-used {
+        height: 100%;
+        background: linear-gradient(90deg, #4caf50, #ffc107, var(--fuji-red));
+        transition: width 0.3s ease;
+      }
 
-        .memory-used {
-            height: 100%;
-            background: linear-gradient(90deg, #4CAF50, #FFC107, var(--fuji-red));
-            transition: width 0.3s ease;
-        }
+      .capture-button {
+        background: var(--fuji-red);
+        color: var(--fuji-white);
+        border: none;
+        padding: 20px 40px;
+        font-size: 18px;
+        font-weight: bold;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        width: 100%;
+        margin-bottom: 20px;
+      }
 
-        .capture-button {
-            background: var(--fuji-red);
-            color: var(--fuji-white);
-            border: none;
-            padding: 20px 40px;
-            font-size: 18px;
-            font-weight: bold;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            width: 100%;
-            margin-bottom: 20px;
-        }
+      .capture-button:hover {
+        background: #b91c1c;
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(214, 45, 32, 0.3);
+      }
 
-        .capture-button:hover {
-            background: #b91c1c;
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(214, 45, 32, 0.3);
-        }
+      .capture-button:disabled {
+        background: var(--fuji-medium-gray);
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
 
-        .capture-button:disabled {
-            background: var(--fuji-medium-gray);
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
+      .log {
+        background: var(--fuji-black);
+        color: #00ff00;
+        padding: 20px;
+        border-radius: 8px;
+        font-family: "Courier New", monospace;
+        font-size: 12px;
+        text-align: left;
+        max-height: 300px;
+        overflow-y: auto;
+        margin-bottom: 20px;
+      }
 
-        .log {
-            background: var(--fuji-black);
-            color: #00ff00;
-            padding: 20px;
-            border-radius: 8px;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            text-align: left;
-            max-height: 300px;
-            overflow-y: auto;
-            margin-bottom: 20px;
-        }
+      .file-list {
+        background: var(--fuji-light-gray);
+        padding: 15px;
+        border-radius: 8px;
+        text-align: left;
+      }
 
-        .file-list {
-            background: var(--fuji-light-gray);
-            padding: 15px;
-            border-radius: 8px;
-            text-align: left;
-        }
+      .file-item {
+        display: flex;
+        justify-content: between;
+        padding: 5px 0;
+        border-bottom: 1px solid #ddd;
+      }
 
-        .file-item {
-            display: flex;
-            justify-content: between;
-            padding: 5px 0;
-            border-bottom: 1px solid #ddd;
-        }
+      .file-item:last-child {
+        border-bottom: none;
+      }
 
-        .file-item:last-child {
-            border-bottom: none;
-        }
+      .cleanup-button {
+        background: var(--fuji-medium-gray);
+        color: var(--fuji-white);
+        border: none;
+        padding: 10px 20px;
+        font-size: 14px;
+        border-radius: 6px;
+        cursor: pointer;
+        margin-left: 10px;
+      }
 
-        .cleanup-button {
-            background: var(--fuji-medium-gray);
-            color: var(--fuji-white);
-            border: none;
-            padding: 10px 20px;
-            font-size: 14px;
-            border-radius: 6px;
-            cursor: pointer;
-            margin-left: 10px;
-        }
+      .cleanup-button:hover {
+        background: #555;
+      }
 
-        .cleanup-button:hover {
-            background: #555;
-        }
+      .test-info {
+        background: #e3f2fd;
+        border-left: 4px solid #2196f3;
+        padding: 15px;
+        margin-bottom: 20px;
+        text-align: left;
+      }
 
-        .test-info {
-            background: #e3f2fd;
-            border-left: 4px solid #2196F3;
-            padding: 15px;
-            margin-bottom: 20px;
-            text-align: left;
-        }
-
-        .test-info h3 {
-            color: #1976D2;
-            margin-bottom: 10px;
-        }
+      .test-info h3 {
+        color: #1976d2;
+        margin-bottom: 10px;
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <div class="container">
-        <h1>📸 DNG Test Camera</h1>
+      <h1>📸 DNG Test Camera</h1>
 
-        <div class="test-info">
-            <h3>Single DNG Capture</h3>
-            <p>Simple single-shot DNG camera using your custom picamera2 library with background DNG processing.</p>
-            <p><strong>Resolution:</strong> 4608×2592 | <strong>Mode:</strong> Single capture</p>
+      <div class="test-info">
+        <h3>Single DNG Capture</h3>
+        <p>
+          Simple single-shot DNG camera using your custom picamera2 library with
+          background DNG processing.
+        </p>
+        <p>
+          <strong>Resolution:</strong> 4608×2592 | <strong>Mode:</strong> Single
+          capture
+        </p>
+      </div>
+
+      <div class="status">
+        <div class="memory-info">
+          <span>Memory Usage:</span>
+          <span id="memory-text">Loading...</span>
         </div>
-
-        <div class="status">
-            <div class="memory-info">
-                <span>Memory Usage:</span>
-                <span id="memory-text">Loading...</span>
-            </div>
-            <div class="memory-bar">
-                <div class="memory-used" id="memory-bar"></div>
-            </div>
-            <div style="font-size: 14px; margin-top: 10px;">
-                <span>Queue Size: <strong id="queue-size">0</strong></span> |
-                <span>DNG Count: <strong id="dng-count">0</strong></span> |
-                <span>Status: <strong id="camera-status">Ready</strong></span>
-            </div>
+        <div class="memory-bar">
+          <div class="memory-used" id="memory-bar"></div>
         </div>
-
-        <button class="capture-button" id="capture-btn" onclick="takeSinglePhoto()">
-            📸 Take DNG Photo
-        </button>
-
-        <button class="cleanup-button" onclick="emergencyCleanup()">
-            🧹 Emergency Memory Cleanup
-        </button>
-
-        <div class="log" id="log">
-            <div>📝 DNG Camera Log - Ready to take photos...</div>
-            <div>💡 Click the button to capture a single DNG photo</div>
-            <div>⚡ Watch memory usage and capture timing</div>
+        <div style="font-size: 14px; margin-top: 10px">
+          <span>Queue Size: <strong id="queue-size">0</strong></span> |
+          <span>DNG Count: <strong id="dng-count">0</strong></span> |
+          <span>Status: <strong id="camera-status">Ready</strong></span>
         </div>
+      </div>
 
-        <div class="file-list" id="file-list">
-            <h4>Generated DNG Files:</h4>
-            <div id="files">No photos yet...</div>
-        </div>
+      <button
+        class="capture-button"
+        id="capture-btn"
+        onclick="takeSinglePhoto()"
+      >
+        📸 Take DNG Photo
+      </button>
+
+      <button class="cleanup-button" onclick="emergencyCleanup()">
+        🧹 Emergency Memory Cleanup
+      </button>
+
+      <div class="log" id="log">
+        <div>📝 DNG Camera Log - Ready to take photos...</div>
+        <div>💡 Click the button to capture a single DNG photo</div>
+        <div>⚡ Watch memory usage and capture timing</div>
+      </div>
+
+      <div class="file-list" id="file-list">
+        <h4>Generated DNG Files:</h4>
+        <div id="files">No photos yet...</div>
+      </div>
     </div>
 
     <script>
-        let isCapturing = false;
-        let logContainer = document.getElementById('log');
-        let captureButton = document.getElementById('capture-btn');
+      let isCapturing = false;
+      let logContainer = document.getElementById("log");
+      let captureButton = document.getElementById("capture-btn");
 
-        function addLog(message) {
-            const timestamp = new Date().toLocaleTimeString();
-            const logEntry = document.createElement('div');
-            logEntry.textContent = `[${timestamp}] ${message}`;
-            logContainer.appendChild(logEntry);
-            logContainer.scrollTop = logContainer.scrollHeight;
-        }
+      function addLog(message) {
+        const timestamp = new Date().toLocaleTimeString();
+        const logEntry = document.createElement("div");
+        logEntry.textContent = `[${timestamp}] ${message}`;
+        logContainer.appendChild(logEntry);
+        logContainer.scrollTop = logContainer.scrollHeight;
+      }
 
-        function updateMemoryDisplay(availableMB) {
-            const totalMB = 512; // Assume 4GB Pi
-            const usedMB = totalMB - availableMB;
-            const percentage = (usedMB / totalMB) * 100;
-            
-            document.getElementById('memory-text').textContent = 
-                `${availableMB.toFixed(0)}MB free / ${totalMB}MB total`;
-            document.getElementById('memory-bar').style.width = `${percentage}%`;
-        }
+      function updateMemoryDisplay(availableMB) {
+        const totalMB = 512; // Assume 4GB Pi
+        const usedMB = totalMB - availableMB;
+        const percentage = (usedMB / totalMB) * 100;
 
-        function updateStatus() {
-            fetch('/test_status')
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('queue-size').textContent = data.queue_size || 0;
-                    document.getElementById('dng-count').textContent = data.dng_count || 0;
-                    
-                    if (data.memory_mb) {
-                        updateMemoryDisplay(data.memory_mb);
-                    }
-                    
-                    if (data.camera_status) {
-                        document.getElementById('camera-status').textContent = data.camera_status;
-                    }
-                })
-                .catch(error => {
-                    console.error('Status update failed:', error);
-                });
-        }
+        document.getElementById(
+          "memory-text"
+        ).textContent = `${availableMB.toFixed(0)}MB free / ${totalMB}MB total`;
+        document.getElementById("memory-bar").style.width = `${percentage}%`;
+      }
 
-        function updateFileList() {
-            fetch('/test_files')
-                .then(response => response.json())
-                .then(data => {
-                    const filesDiv = document.getElementById('files');
-                    if (data.files && data.files.length > 0) {
-                        filesDiv.innerHTML = data.files.map(file => 
-                            `<div class="file-item">
-                                <span>${file.name}</span>
-                                <span>${(file.size_mb).toFixed(1)}MB</span>
-                            </div>`
-                        ).join('');
-                    } else {
-                        filesDiv.innerHTML = 'No files yet...';
-                    }
-                })
-                .catch(error => {
-                    console.error('File list update failed:', error);
-                });
-        }
+      function updateStatus() {
+        fetch("/test_status")
+          .then((response) => response.json())
+          .then((data) => {
+            document.getElementById("queue-size").textContent =
+              data.queue_size || 0;
+            document.getElementById("dng-count").textContent =
+              data.dng_count || 0;
 
-        async function takeSinglePhoto() {
-            if (isCapturing) return;
-            
-            isCapturing = true;
-            captureButton.disabled = true;
-            captureButton.textContent = '📸 Capturing...';
-            
-            const photoNumber = Date.now(); // Use timestamp as photo number
-            addLog('📷 Taking single DNG photo...');
-            
-            try {
-                const response = await fetch('/capture_single_dng', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ photo_number: photoNumber })
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    addLog(`✅ Photo captured: ${result.filename}`);
-                    addLog(`⏱️  Capture time: ${result.capture_time}`);
-                    if (result.size_mb) {
-                        addLog(`📁 File size: ${result.size_mb}MB`);
-                    }
-                    if (result.memory_info) {
-                        addLog(`🧠 Memory: ${result.memory_info.available_mb.toFixed(0)}MB available`);
-                    }
-                } else {
-                    addLog(`❌ Capture failed: ${result.error}`);
-                }
-                
-            } catch (error) {
-                addLog(`💥 Request failed: ${error.message}`);
-            } finally {
-                resetButton();
-                // Update file list after capture
-                setTimeout(updateFileList, 1000);
+            if (data.memory_mb) {
+              updateMemoryDisplay(data.memory_mb);
             }
+
+            if (data.camera_status) {
+              document.getElementById("camera-status").textContent =
+                data.camera_status;
+            }
+          })
+          .catch((error) => {
+            console.error("Status update failed:", error);
+          });
+      }
+
+      function updateFileList() {
+        fetch("/test_files")
+          .then((response) => response.json())
+          .then((data) => {
+            const filesDiv = document.getElementById("files");
+            if (data.files && data.files.length > 0) {
+              filesDiv.innerHTML = data.files
+                .map(
+                  (file) =>
+                    `<div class="file-item">
+        <a href="/download/${
+          file.name
+        }" target="_blank" style="color: var(--fuji-red); text-decoration: none;">${
+                      file.name
+                    }</a>
+        <span>${file.size_mb.toFixed(1)}MB</span>
+    </div>`
+                )
+                .join("");
+            } else {
+              filesDiv.innerHTML = "No files yet...";
+            }
+          })
+          .catch((error) => {
+            console.error("File list update failed:", error);
+          });
+      }
+
+      async function takeSinglePhoto() {
+        if (isCapturing) return;
+
+        isCapturing = true;
+        captureButton.disabled = true;
+        captureButton.textContent = "📸 Capturing...";
+
+        const photoNumber = Date.now(); // Use timestamp as photo number
+        addLog("📷 Taking single DNG photo...");
+
+        try {
+          const response = await fetch("/capture_single_dng", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ photo_number: photoNumber }),
+          });
+
+          const result = await response.json();
+
+          if (result.success) {
+            addLog(`✅ Photo captured: ${result.filename}`);
+            addLog(`⏱️  Capture time: ${result.capture_time}`);
+            if (result.size_mb) {
+              addLog(`📁 File size: ${result.size_mb}MB`);
+            }
+            if (result.memory_info) {
+              addLog(
+                `🧠 Memory: ${result.memory_info.available_mb.toFixed(
+                  0
+                )}MB available`
+              );
+            }
+          } else {
+            addLog(`❌ Capture failed: ${result.error}`);
+          }
+        } catch (error) {
+          addLog(`💥 Request failed: ${error.message}`);
+        } finally {
+          resetButton();
+          // Update file list after capture
+          setTimeout(updateFileList, 1000);
         }
+      }
 
-        function monitorTestProgress() {
-            let checkCount = 0;
-            const maxChecks = 40; // 20 seconds of monitoring
-            
-            const progressInterval = setInterval(() => {
-                fetch('/test_progress')
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.completed) {
-                            clearInterval(progressInterval);
-                            addLog('🎉 DNG test sequence completed!');
-                            
-                            if (data.results) {
-                                data.results.forEach(result => {
-                                    addLog(`📸 ${result.filename}: ${result.capture_time}s, ${result.size_mb}MB`);
-                                });
-                            }
-                            
-                            if (data.memory_freed) {
-                                addLog(`🧠 Memory freed: ${data.memory_freed}MB`);
-                            }
-                            
-                            resetButton();
-                            updateFileList();
-                        } else if (data.current_capture) {
-                            addLog(`📷 Capture ${data.current_capture}/3 in progress...`);
-                        }
-                        
-                        checkCount++;
-                        if (checkCount >= maxChecks) {
-                            clearInterval(progressInterval);
-                            addLog('⏰ Test monitoring timeout - check manually');
-                            resetButton();
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Progress check failed:', error);
-                    });
-            }, 500);
-        }
+      function monitorTestProgress() {
+        let checkCount = 0;
+        const maxChecks = 40; // 20 seconds of monitoring
 
-        function emergencyCleanup() {
-            addLog('🚨 Initiating emergency memory cleanup...');
-            
-            fetch('/emergency_cleanup', { method: 'POST' })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        addLog('✅ Emergency cleanup completed');
-                        addLog(`🧠 Memory freed: ${data.memory_freed || 'Unknown'}MB`);
-                    } else {
-                        addLog(`❌ Cleanup failed: ${data.error}`);
-                    }
-                })
-                .catch(error => {
-                    addLog(`💥 Cleanup request failed: ${error.message}`);
-                });
-        }
+        const progressInterval = setInterval(() => {
+          fetch("/test_progress")
+            .then((response) => response.json())
+            .then((data) => {
+              if (data.completed) {
+                clearInterval(progressInterval);
+                addLog("🎉 DNG test sequence completed!");
 
-        function resetButton() {
-            isCapturing = false;
-            captureButton.disabled = false;
-            captureButton.textContent = '📸 Take DNG Photo';
-        }
+                if (data.results) {
+                  data.results.forEach((result) => {
+                    addLog(
+                      `📸 ${result.filename}: ${result.capture_time}s, ${result.size_mb}MB`
+                    );
+                  });
+                }
 
-        // Auto-update status every 2 seconds
-        setInterval(updateStatus, 2000);
-        setInterval(updateFileList, 5000);
+                if (data.memory_freed) {
+                  addLog(`🧠 Memory freed: ${data.memory_freed}MB`);
+                }
 
-        // Initial load
-        updateStatus();
-        updateFileList();
+                resetButton();
+                updateFileList();
+              } else if (data.current_capture) {
+                addLog(`📷 Capture ${data.current_capture}/3 in progress...`);
+              }
+
+              checkCount++;
+              if (checkCount >= maxChecks) {
+                clearInterval(progressInterval);
+                addLog("⏰ Test monitoring timeout - check manually");
+                resetButton();
+              }
+            })
+            .catch((error) => {
+              console.error("Progress check failed:", error);
+            });
+        }, 500);
+      }
+
+      function emergencyCleanup() {
+        addLog("🚨 Initiating emergency memory cleanup...");
+
+        fetch("/emergency_cleanup", { method: "POST" })
+          .then((response) => response.json())
+          .then((data) => {
+            if (data.success) {
+              addLog("✅ Emergency cleanup completed");
+              addLog(`🧠 Memory freed: ${data.memory_freed || "Unknown"}MB`);
+            } else {
+              addLog(`❌ Cleanup failed: ${data.error}`);
+            }
+          })
+          .catch((error) => {
+            addLog(`💥 Cleanup request failed: ${error.message}`);
+          });
+      }
+
+      function resetButton() {
+        isCapturing = false;
+        captureButton.disabled = false;
+        captureButton.textContent = "📸 Take DNG Photo";
+      }
+
+      // Auto-update status every 2 seconds
+      setInterval(updateStatus, 2000);
+      setInterval(updateFileList, 5000);
+
+      // Initial load
+      updateStatus();
+      updateFileList();
     </script>
-</body>
+  </body>
 </html>

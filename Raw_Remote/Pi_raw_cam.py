@@ -4,7 +4,7 @@ Simple DNG Camera Interface - Flask Backend
 Single photo capture using background DNG processing
 """
 
-from flask import Flask, render_template_string, jsonify, request
+from flask import Flask, render_template_string, jsonify, request,send_file
 import os
 import time
 import threading
@@ -189,17 +189,20 @@ def initialize_camera():
         print(f"❌ Camera initialization failed: {e}")
         return False
     
-def _capture_thread(picam2_instance, filename):
-    """Internal thread function to perform the capture."""
+def _capture_thread(picam2_instance, filename, result_container):
+    """Internal thread function to perform the capture with result tracking."""
     try:
+        result_container['started'] = True
+        result_container['start_time'] = time.time()
         picam2_instance.capture_file(filename, name="raw")
+        result_container['completed'] = True
+        result_container['end_time'] = time.time()
     except Exception as e:
-        # Pass the exception back to the main thread
-        global capture_error
-        capture_error = e
-        
+        result_container['error'] = e
+        result_container['completed'] = False
+
 def capture_single_dng():
-    """Capture a single DNG photo with a timeout."""
+    """Capture a single DNG photo with improved timeout handling."""
     global camera_state
     
     if not camera_state['initialized']:
@@ -209,9 +212,6 @@ def capture_single_dng():
         return {'success': False, 'error': 'Already capturing'}
     
     camera_state['capturing'] = True
-    
-    global capture_error
-    capture_error = None
     
     try:
         picam2 = camera_state['picam2']
@@ -224,24 +224,58 @@ def capture_single_dng():
         mem_before = get_memory_info()
         start_time = time.time()
         
+        # Create result container for thread communication
+        result_container = {
+            'started': False,
+            'completed': False,
+            'error': None,
+            'start_time': None,
+            'end_time': None
+        }
+        
         # Start the capture in a separate thread
-        capture_thread = threading.Thread(target=_capture_thread, args=(picam2, filename))
+        capture_thread = threading.Thread(
+            target=_capture_thread, 
+            args=(picam2, filename, result_container)
+        )
+        capture_thread.daemon = True  # Dies with main thread
         capture_thread.start()
         
-        # Set a timeout for the capture (e.g., 30 seconds)
-        capture_thread.join(timeout=3)
+        # Wait for capture to actually start (up to 2 seconds)
+        start_timeout = 2.0
+        start_check_time = time.time()
+        while not result_container['started'] and (time.time() - start_check_time) < start_timeout:
+            time.sleep(0.1)
         
-        if capture_thread.is_alive():
-            # The capture thread is still running after the timeout
-            print("❌ Capture timed out. The camera is likely unresponsive.")
-            # It's best to stop and restart the camera in this case
-            camera_state['picam2'].stop()
-            camera_state['picam2'].close()
-            camera_state['initialized'] = False
-            return {'success': False, 'error': 'Capture timed out. Camera may need a restart.'}
+        if not result_container['started']:
+            print("❌ Capture failed to start within timeout")
+            return {'success': False, 'error': 'Capture failed to start - camera may be frozen'}
+        
+        # Wait for capture to complete (up to 10 seconds total)
+        capture_timeout = 10.0
+        capture_thread.join(timeout=capture_timeout)
+        
+        if capture_thread.is_alive() or not result_container['completed']:
+            print("❌ Capture timed out or failed to complete")
+            # Force camera restart
+            try:
+                camera_state['picam2'].stop()
+                camera_state['picam2'].close()
+                camera_state['picam2'] = None
+                camera_state['initialized'] = False
+                print("🔄 Camera forcibly closed due to timeout")
+            except Exception as cleanup_error:
+                print(f"Cleanup error: {cleanup_error}")
             
-        if capture_error:
-            raise capture_error # Re-raise any exception from the thread
+            return {
+                'success': False, 
+                'error': 'Capture timed out. Camera has been reset.',
+                'restart_required': True
+            }
+        
+        # Check for capture errors
+        if result_container['error']:
+            raise result_container['error']
             
         capture_time = time.time() - start_time
         mem_after = get_memory_info()
@@ -249,12 +283,14 @@ def capture_single_dng():
         file_size_mb = 0
         if os.path.exists(filename):
             file_size_mb = os.path.getsize(filename) / 1024 / 1024
+        else:
+            return {'success': False, 'error': 'Capture completed but file not found'}
         
         camera_state['photo_counter'] += 1
         
         result = {
             'success': True,
-            'filename': filename,
+            'filename': os.path.basename(filename),  # Just filename, not full path
             'photo_number': photo_num,
             'capture_time': f"{capture_time:.3f}s",
             'size_mb': file_size_mb,
@@ -270,7 +306,8 @@ def capture_single_dng():
         return {'success': False, 'error': str(e)}
         
     finally:
-        camera_state['capturing'] = False
+        camera_state['capturing'] = False   
+           
 def emergency_memory_cleanup():
     """Emergency memory cleanup function"""
     global camera_state
@@ -336,12 +373,36 @@ def test_files():
 
 @app.route('/capture_single_dng', methods=['POST'])
 def capture_single_dng_route():
-    """Capture a single DNG photo"""
+    """Capture a single DNG photo with auto-restart on timeout"""
     if camera_state['capturing']:
         return jsonify({'success': False, 'error': 'Already capturing a photo'})
     
     result = capture_single_dng()
+    
+    # Auto-restart camera if needed
+    if not result['success'] and result.get('restart_required'):
+        print("🔄 Attempting to reinitialize camera...")
+        time.sleep(2)
+        if initialize_camera():
+            print("✅ Camera reinitialized successfully")
+            result['camera_restarted'] = True
+        else:
+            print("❌ Camera reinitialize failed")
+            result['camera_restart_failed'] = True
+    
     return jsonify(result)
+
+@app.route('/download/<filename>')
+def download_file(filename):
+    """Download DNG file"""
+    try:
+        dng_path = os.path.join("dng", filename)
+        if os.path.exists(dng_path) and filename.endswith('.dng'):
+            return send_file(dng_path, as_attachment=True, download_name=filename)
+        else:
+            return "File not found", 404
+    except Exception as e:
+        return f"Error downloading file: {e}", 500
 
 @app.route('/emergency_cleanup', methods=['POST'])
 def emergency_cleanup_route():
