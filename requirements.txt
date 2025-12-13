@@ -1,0 +1,21 @@
+# Core dependencies
+Flask>=2.0.0
+picamera2>=0.3.0
+
+# Image processing
+numpy>=1.19.0
+Pillow>=8.0.0
+
+# System utilities
+psutil>=5.8.0
+
+# GPIO control (for LED features)
+RPi.GPIO>=0.7.0
+
+# Notes:
+# - picamera2 is typically installed via apt on Raspberry Pi OS
+#   sudo apt install -y python3-picamera2
+# - libcamera must be installed system-wide
+# - For development, you may also want:
+#   - opencv-python (for advanced image processing)
+#   - rawpy (alternative RAW processing)
