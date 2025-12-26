@@ -1,0 +1,46 @@
+# Makefile for ST7789 Shared Library
+# Creates libst7789.so for Python ctypes
+
+CC = gcc
+CFLAGS = -Wall -O2 -fPIC
+LIBS = -lbcm2835 -lm
+TARGET = libst7789.so
+
+# Source files
+LIB_SRC = st7789_lib.c st7789.c
+LIB_OBJ = st7789_lib.o st7789.o
+
+.PHONY: all clean install
+
+all: $(TARGET)
+
+st7789.o: st7789.c st7789.h
+	$(CC) $(CFLAGS) -c st7789.c -o st7789.o
+
+st7789_lib.o: st7789_lib.c st7789.h
+	$(CC) $(CFLAGS) -c st7789_lib.c -o st7789_lib.o
+
+$(TARGET): $(LIB_OBJ)
+	$(CC) -shared -o $(TARGET) $(LIB_OBJ) $(LIBS)
+	@echo ""
+	@echo "=========================================="
+	@echo "Shared library built: $(TARGET)"
+	@echo "=========================================="
+	@echo ""
+	@echo "To install system-wide (optional):"
+	@echo "  sudo make install"
+	@echo ""
+	@echo "Or use locally with Python:"
+	@echo "  LD_LIBRARY_PATH=. python3 camera_viewfinder.py"
+	@echo "=========================================="
+
+install: $(TARGET)
+	sudo cp $(TARGET) /usr/local/lib/
+	sudo ldconfig
+	@echo ""
+	@echo "Installed to /usr/local/lib/$(TARGET)"
+	@echo "Python can now load it without LD_LIBRARY_PATH"
+
+clean:
+	rm -f $(LIB_OBJ) $(TARGET)
+	@echo "Clean complete"
