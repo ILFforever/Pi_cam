@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PiCam Photo Gallery</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+            padding: 20px;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #2a2a2a;
+            border-radius: 10px;
+        }
+
+        h1 {
+            font-size: 28px;
+            font-weight: 600;
+        }
+
+        .stats {
+            display: flex;
+            gap: 20px;
+            font-size: 14px;
+            color: #aaa;
+        }
+
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+        }
+
+        .stat-value {
+            font-size: 20px;
+            color: #fff;
+            font-weight: 600;
+        }
+
+        .gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .photo-card {
+            background: #2a2a2a;
+            border-radius: 10px;
+            overflow: hidden;
+            transition: transform 0.2s;
+            position: relative;
+        }
+
+        .photo-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .photo-card img {
+            width: 100%;
+            height: 250px;
+            object-fit: cover;
+            cursor: pointer;
+        }
+
+        .photo-info {
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .photo-name {
+            font-size: 14px;
+            color: #fff;
+        }
+
+        .photo-size {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .delete-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .delete-btn:hover {
+            background: #c82333;
+        }
+
+        .delete-btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+
+        .empty-state svg {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        /* Modal styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            max-width: 90%;
+            max-height: 90%;
+        }
+
+        .modal img {
+            max-width: 100%;
+            max-height: 90vh;
+            object-fit: contain;
+        }
+
+        .close-modal {
+            position: absolute;
+            top: 20px;
+            right: 40px;
+            color: #fff;
+            font-size: 40px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .close-modal:hover {
+            color: #ccc;
+        }
+
+        .refresh-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .refresh-btn:hover {
+            background: #218838;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📷 PiCam Photo Gallery</h1>
+        <div style="display: flex; gap: 15px; align-items: center;">
+            <div class="stats">
+                <div class="stat-item">
+                    <span class="stat-label">Photos</span>
+                    <span class="stat-value" id="photoCount">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Storage</span>
+                    <span class="stat-value" id="storageUsed">-</span>
+                </div>
+            </div>
+            <button class="refresh-btn" onclick="loadGallery()">🔄 Refresh</button>
+        </div>
+    </div>
+
+    <div id="gallery" class="gallery">
+        <div class="loading">Loading photos...</div>
+    </div>
+
+    <!-- Modal for full-size image -->
+    <div id="modal" class="modal" onclick="closeModal()">
+        <span class="close-modal">&times;</span>
+        <div class="modal-content">
+            <img id="modalImage" src="" alt="Full size photo">
+        </div>
+    </div>
+
+    <script>
+        let photos = [];
+
+        async function loadGallery() {
+            try {
+                // Load photos
+                const photosResponse = await fetch('/api/photos');
+                const photosData = await photosResponse.json();
+
+                // Load stats
+                const statsResponse = await fetch('/api/stats');
+                const statsData = await statsResponse.json();
+
+                if (photosData.success) {
+                    photos = photosData.photos;
+                    renderGallery();
+                    updateStats(statsData);
+                }
+            } catch (error) {
+                console.error('Error loading gallery:', error);
+                document.getElementById('gallery').innerHTML =
+                    '<div class="empty-state"><p>Error loading photos</p></div>';
+            }
+        }
+
+        function renderGallery() {
+            const gallery = document.getElementById('gallery');
+
+            if (photos.length === 0) {
+                gallery.innerHTML = `
+                    <div class="empty-state">
+                        <svg fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm12 12H4l4-8 3 6 2-4 3 6z" clip-rule="evenodd"/>
+                        </svg>
+                        <h2>No photos yet</h2>
+                        <p>Take some photos with your camera!</p>
+                    </div>
+                `;
+                return;
+            }
+
+            gallery.innerHTML = photos.map(photo => `
+                <div class="photo-card" data-filename="${photo.filename}">
+                    <img src="/photos/${photo.filename}"
+                         alt="${photo.filename}"
+                         onclick="openModal('/photos/${photo.filename}')">
+                    <div class="photo-info">
+                        <div>
+                            <div class="photo-name">${photo.filename}</div>
+                            <div class="photo-size">${formatSize(photo.size)}</div>
+                        </div>
+                        <button class="delete-btn" onclick="deletePhoto('${photo.filename}', event)">
+                            🗑️ Delete
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updateStats(data) {
+            if (data.success) {
+                document.getElementById('photoCount').textContent = data.photo_count;
+                document.getElementById('storageUsed').textContent = data.total_size_mb + ' MB';
+            }
+        }
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        async function deletePhoto(filename, event) {
+            event.stopPropagation();
+
+            if (!confirm(`Delete ${filename}?\nThis action cannot be undone.`)) {
+                return;
+            }
+
+            const btn = event.target;
+            btn.disabled = true;
+            btn.textContent = 'Deleting...';
+
+            try {
+                const response = await fetch(`/api/photos/${filename}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    // Remove the photo card from the DOM
+                    const card = document.querySelector(`[data-filename="${filename}"]`);
+                    if (card) {
+                        card.style.transition = 'opacity 0.3s, transform 0.3s';
+                        card.style.opacity = '0';
+                        card.style.transform = 'scale(0.9)';
+                        setTimeout(() => {
+                            loadGallery(); // Reload gallery to update stats
+                        }, 300);
+                    }
+                } else {
+                    alert('Error deleting photo: ' + data.error);
+                    btn.disabled = false;
+                    btn.textContent = '🗑️ Delete';
+                }
+            } catch (error) {
+                console.error('Error deleting photo:', error);
+                alert('Error deleting photo');
+                btn.disabled = false;
+                btn.textContent = '🗑️ Delete';
+            }
+        }
+
+        function openModal(imageSrc) {
+            document.getElementById('modalImage').src = imageSrc;
+            document.getElementById('modal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.remove('active');
+        }
+
+        // Close modal with Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeModal();
+        });
+
+        // Load gallery on page load
+        loadGallery();
+
+        // Auto-refresh every 30 seconds
+        setInterval(loadGallery, 30000);
+    </script>
+</body>
+</html>

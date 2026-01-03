@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sshpass -p \"19283746\" ssh:*)",
+      "Bash(wsl sudo apt-get:*)",
+      "Bash(wsl ls:*)",
+      "Bash(wsl grep:*)"
+    ]
+  }
+}

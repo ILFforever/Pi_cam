@@ -133,6 +133,45 @@ def stats():
             'error': str(e)
         }), 500
 
+@app.route('/api/photos/<path:filename>', methods=['DELETE'])
+def delete_photo(filename):
+    """Delete a photo"""
+    try:
+        photo_path = PHOTO_DIR / filename
+
+        # Security check: ensure the file is within PHOTO_DIR
+        if not photo_path.resolve().is_relative_to(PHOTO_DIR.resolve()):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid file path'
+            }), 403
+
+        # Check if file exists
+        if not photo_path.exists():
+            return jsonify({
+                'success': False,
+                'error': 'Photo not found'
+            }), 404
+
+        # Delete the file
+        photo_path.unlink()
+
+        # Update the viewfinder's photo count if instance exists
+        global viewfinder_instance
+        if viewfinder_instance:
+            viewfinder_instance.photos_taken = len(list(PHOTO_DIR.glob("*.jpg")))
+            viewfinder_instance.photos_remaining = 9999 - viewfinder_instance.photos_taken
+
+        return jsonify({
+            'success': True,
+            'message': f'Photo {filename} deleted successfully'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 def run_flask_server():
     """Run Flask server in a separate thread"""
     print("[WEB] Starting photo gallery server on http://0.0.0.0:5000")
@@ -224,47 +263,89 @@ class CameraViewfinder:
         
         # Focus state
         self.focus_locked = False
+        self.focus_feedback = None  # Visual feedback: None, 'focusing', 'success', 'error'
+        self.focus_feedback_time = 0  # Time when feedback was set
 
-        # Focus zone selection state (3x3 grid)
-        self.focus_zone_enabled = False  # Toggle with joystick switch
-        self.focus_zone_x = 1  # Center position (0, 1, 2)
-        self.focus_zone_y = 1  # Center position (0, 1, 2)
-        self.focus_zones_grid = 3  # 3x3 grid
+        # Focus zone selection state (5x5 grid for better precision)
+        self.focus_zone_enabled = False  # Toggle with joystick down - actively selecting zone
+        self.focus_zone_locked = False  # Zone is confirmed and locked (persists after confirmation)
+        self.focus_zone_x = 2  # Center position (0-4)
+        self.focus_zone_y = 2  # Center position (0-4)
+        self.focus_zones_grid = 5  # 5x5 grid for more detailed selection
 
         # Gallery viewer state
         self.gallery_mode = False  # Toggle with LEFT button
         self.gallery_index = 0  # Current photo index
         self.gallery_photos = []  # List of photo paths
-        
+        self.gallery_delete_confirm = False  # Confirmation state for deletion
+
         # Initialize display
         print("Initializing display...")
         self.display = ST7789Display()
-        
-        # Show startup screen
-        self.display.clear((0, 0, 0))
-        self.display.draw_text(10, DISPLAY_HEIGHT // 2 - 20, "CAMERA", 16, (255, 255, 255))
-        self.display.draw_text(5, DISPLAY_HEIGHT // 2, "STARTING", 12, (0, 255, 0))
-        self.display.refresh()
-        
-        # Initialize camera
+
+        # Show startup screen with animated loading bar
+        def show_loading_screen(progress=0.0):
+            """Show centered startup screen with loading bar"""
+            # Create black canvas
+            canvas = np.zeros((DISPLAY_HEIGHT, DISPLAY_WIDTH, 3), dtype=np.uint8)
+            img = Image.fromarray(canvas)
+            draw = ImageDraw.Draw(img)
+
+            # Centered text "CAMERA STARTING"
+            text = "CAMERA STARTING"
+            # Approximate text width (rough estimate for default font)
+            text_width = len(text) * 6  # About 6 pixels per char
+            text_x = (DISPLAY_WIDTH - text_width) // 2
+            text_y = DISPLAY_HEIGHT // 2 - 15
+            draw.text((text_x, text_y), text, fill=(255, 255, 255))
+
+            # Loading bar below text
+            bar_width = 200
+            bar_height = 8
+            bar_x = (DISPLAY_WIDTH - bar_width) // 2
+            bar_y = DISPLAY_HEIGHT // 2 + 5
+
+            # Draw border
+            draw.rectangle([bar_x, bar_y, bar_x + bar_width, bar_y + bar_height],
+                         outline=(255, 255, 255), width=1)
+
+            # Draw progress fill
+            fill_width = int(bar_width * progress)
+            if fill_width > 0:
+                draw.rectangle([bar_x + 1, bar_y + 1,
+                              bar_x + fill_width - 1, bar_y + bar_height - 1],
+                             fill=(0, 255, 0))
+
+            self.display.show_image(np.array(img))
+
+        # Show initial loading screen
+        show_loading_screen(0.0)
+
+        # Initialize camera with loading animation
         print("Initializing camera...")
+        show_loading_screen(0.2)
+
         self.camera = Picamera2()
-        
+        show_loading_screen(0.4)
+
         # Configure camera for square preview
         config = self.camera.create_preview_configuration(
             main={"size": (PREVIEW_WIDTH, PREVIEW_HEIGHT), "format": "RGB888"}
         )
         self.camera.configure(config)
-        
+        show_loading_screen(0.6)
+
         # Camera settings
         self.camera.set_controls({
             "Contrast": 1.2,
             "Saturation": 1.1,
             "Sharpness": 1.0
         })
+        show_loading_screen(0.8)
 
         self.camera.start()
-        time.sleep(1)  # Camera warm-up
+        show_loading_screen(1.0)
+        time.sleep(0.5)  # Show complete bar briefly
 
         # Disable auto-exposure and use manual control with fixed shutter speed
         # We'll manually adjust ISO based on brightness
@@ -381,11 +462,19 @@ class CameraViewfinder:
             shutter_text = "---"
         draw.text((5, 18), shutter_text, fill=(255, 255, 255))
 
-        # Below shutter - Focus distance (rounded to int)
+        # Below shutter - Focus distance
         if self.current_focus_distance > 0:
             if self.current_focus_distance < 1:
+                # Show in centimeters for close distances
                 focus_text = f"{int(self.current_focus_distance*100)}cm"
+            elif self.current_focus_distance < 10:
+                # Show in meters with 1 decimal for mid-range
+                focus_text = f"{self.current_focus_distance:.1f}m"
+            elif self.current_focus_distance >= 50:
+                # Show infinity symbol for far distances
+                focus_text = "∞"
             else:
+                # Show whole meters for longer distances
                 focus_text = f"{int(self.current_focus_distance)}m"
         else:
             focus_text = "---"
@@ -395,42 +484,117 @@ class CameraViewfinder:
         counter_text = f"{self.photos_remaining}"
         draw.text((DISPLAY_WIDTH - 40, 5), counter_text, fill=(255, 255, 255))
 
-        # Focus lock indicator (bottom right)
-        if self.focus_locked:
-            draw.text((DISPLAY_WIDTH - 50, DISPLAY_HEIGHT - 15), "LOCK", fill=(0, 255, 0))
-        
+        # Focus feedback indicator (bottom right)
+        # Show while focusing and for 2 seconds after focus operation
+        if self.focus_feedback:
+            show_feedback = False
+            if self.focus_feedback == 'focusing':
+                show_feedback = True  # Always show while focusing
+            elif (time.time() - self.focus_feedback_time) < 2.0:
+                show_feedback = True  # Show success/error for 2 seconds
+
+            if show_feedback:
+                # Show feedback indicator in bottom right corner
+                indicator_x = DISPLAY_WIDTH - 30
+                indicator_y = DISPLAY_HEIGHT - 10
+                circle_radius = 6
+
+                if self.focus_feedback == 'focusing':
+                    # Yellow circle while focusing is in progress
+                    draw.ellipse([indicator_x - circle_radius, indicator_y - circle_radius,
+                                indicator_x + circle_radius, indicator_y + circle_radius],
+                               fill=(255, 255, 0), outline=(255, 255, 255), width=2)
+                elif self.focus_feedback == 'success':
+                    # Green circle for successful focus
+                    draw.ellipse([indicator_x - circle_radius, indicator_y - circle_radius,
+                                indicator_x + circle_radius, indicator_y + circle_radius],
+                               fill=(0, 255, 0), outline=(255, 255, 255), width=2)
+                elif self.focus_feedback == 'error':
+                    # Red dot for focus failure
+                    dot_radius = 5
+                    draw.ellipse([indicator_x - dot_radius, indicator_y - dot_radius,
+                                indicator_x + dot_radius, indicator_y + dot_radius],
+                               fill=(255, 0, 0), outline=(255, 255, 255), width=2)
+                    # Draw "ERR" text next to dot
+                    draw.text((indicator_x - 35, indicator_y - 6), "ERR", fill=(255, 0, 0))
+
+        # Focus zone tooltip (right side, below counter)
+        if self.focus_zone_enabled or self.focus_zone_locked:
+            if self.focus_zone_enabled:
+                tooltip_text = "SELECT"
+                tooltip_color = (255, 255, 0)  # Yellow while selecting
+            else:
+                tooltip_text = "ZONE"
+                tooltip_color = (0, 200, 255)  # Cyan when locked
+            draw.text((DISPLAY_WIDTH - 45, 18), tooltip_text, fill=tooltip_color)
+
+        # Control hints (right side, smaller text, compact format)
+        hint_y = 31
+        hint_color = (180, 180, 180)  # Light gray
+        hint_spacing = 10
+
+        if self.focus_zone_enabled:
+            # Show focus zone selection hints (arrows for movement)
+            draw.text((DISPLAY_WIDTH - 60, hint_y), "DPAD MOVE", fill=hint_color)
+            draw.text((DISPLAY_WIDTH - 60, hint_y + hint_spacing), "OK: LOCK", fill=(255, 255, 0))
+        elif self.focus_zone_locked:
+            # Show locked zone hints
+            draw.text((DISPLAY_WIDTH - 60, hint_y), "DN: EDIT", fill=hint_color)
+            draw.text((DISPLAY_WIDTH - 60, hint_y + hint_spacing), "OK: RESET", fill=(0, 200, 255))
+        else:
+            # Show normal viewfinder hints
+            draw.text((DISPLAY_WIDTH - 60, hint_y), "LF: GALRY", fill=hint_color)
+            draw.text((DISPLAY_WIDTH - 60, hint_y + hint_spacing), "DN: FOCUS", fill=hint_color)
+
         # Draw white border around preview area
         border_x1 = PREVIEW_OFFSET_X - 1
         border_x2 = PREVIEW_OFFSET_X + PREVIEW_WIDTH
-        draw.rectangle([border_x1, 0, border_x2, DISPLAY_HEIGHT - 1], 
+        draw.rectangle([border_x1, 0, border_x2, DISPLAY_HEIGHT - 1],
                     outline=(255, 255, 255), width=1)
-        
-        # Rule of thirds grid lines (subtle gray) OR Focus zone grid (bright when enabled)
-        if self.focus_zone_enabled:
-            grid_color = (0, 255, 0)  # Green when focus zone is active
+
+        # Rule of thirds grid lines (subtle gray) OR Focus zone grid (bright when enabled/locked)
+        show_grid = self.focus_zone_enabled or self.focus_zone_locked
+        if show_grid:
+            if self.focus_zone_enabled:
+                grid_color = (100, 100, 100)  # Darker gray when selecting
+            else:
+                grid_color = (60, 60, 60)  # Very subtle when locked
         else:
-            grid_color = (80, 80, 80)  # Subtle gray for rule of thirds
+            grid_color = (40, 40, 40)  # Almost invisible for rule of thirds
 
-        # Vertical lines (at 1/3 and 2/3 of preview width)
-        third_width = PREVIEW_WIDTH // 3
-        line1_x = PREVIEW_OFFSET_X + third_width
-        line2_x = PREVIEW_OFFSET_X + (2 * third_width)
+        # Draw 5x5 grid if focus zone is enabled or locked
+        if show_grid:
+            zone_width = PREVIEW_WIDTH // self.focus_zones_grid
+            zone_height = DISPLAY_HEIGHT // self.focus_zones_grid
 
-        draw.line([line1_x, 0, line1_x, DISPLAY_HEIGHT], fill=grid_color, width=1)
-        draw.line([line2_x, 0, line2_x, DISPLAY_HEIGHT], fill=grid_color, width=1)
+            # Vertical lines
+            for i in range(1, self.focus_zones_grid):
+                line_x = PREVIEW_OFFSET_X + (i * zone_width)
+                draw.line([line_x, 0, line_x, DISPLAY_HEIGHT], fill=grid_color, width=1)
 
-        # Horizontal lines (at 1/3 and 2/3 of preview height)
-        third_height = DISPLAY_HEIGHT // 3
-        line1_y = third_height
-        line2_y = 2 * third_height
+            # Horizontal lines
+            for i in range(1, self.focus_zones_grid):
+                line_y = i * zone_height
+                draw.line([PREVIEW_OFFSET_X, line_y, PREVIEW_OFFSET_X + PREVIEW_WIDTH, line_y],
+                        fill=grid_color, width=1)
+        else:
+            # Show simple rule of thirds grid
+            third_width = PREVIEW_WIDTH // 3
+            line1_x = PREVIEW_OFFSET_X + third_width
+            line2_x = PREVIEW_OFFSET_X + (2 * third_width)
+            draw.line([line1_x, 0, line1_x, DISPLAY_HEIGHT], fill=grid_color, width=1)
+            draw.line([line2_x, 0, line2_x, DISPLAY_HEIGHT], fill=grid_color, width=1)
 
-        draw.line([PREVIEW_OFFSET_X, line1_y, PREVIEW_OFFSET_X + PREVIEW_WIDTH, line1_y],
-                fill=grid_color, width=1)
-        draw.line([PREVIEW_OFFSET_X, line2_y, PREVIEW_OFFSET_X + PREVIEW_WIDTH, line2_y],
-                fill=grid_color, width=1)
+            third_height = DISPLAY_HEIGHT // 3
+            line1_y = third_height
+            line2_y = 2 * third_height
+            draw.line([PREVIEW_OFFSET_X, line1_y, PREVIEW_OFFSET_X + PREVIEW_WIDTH, line1_y],
+                    fill=grid_color, width=1)
+            draw.line([PREVIEW_OFFSET_X, line2_y, PREVIEW_OFFSET_X + PREVIEW_WIDTH, line2_y],
+                    fill=grid_color, width=1)
 
-        # Draw focus zone indicator if enabled
-        if self.focus_zone_enabled:
+        # Draw focus zone box (cleaner design with L-shaped corners)
+        if self.focus_zone_enabled or self.focus_zone_locked:
             # Calculate zone rectangle bounds
             zone_width = PREVIEW_WIDTH // self.focus_zones_grid
             zone_height = DISPLAY_HEIGHT // self.focus_zones_grid
@@ -440,49 +604,142 @@ class CameraViewfinder:
             zone_x2 = zone_x1 + zone_width
             zone_y2 = zone_y1 + zone_height
 
-            # Draw highlighted zone with thick yellow border
-            draw.rectangle([zone_x1, zone_y1, zone_x2, zone_y2],
-                         outline=(255, 255, 0), width=2)
+            # Choose color based on state
+            if self.focus_zone_enabled:
+                box_color = (255, 255, 0)  # Yellow when actively selecting
+            else:
+                box_color = (0, 200, 255)  # Cyan when locked/confirmed
 
-            # Draw corner markers for better visibility
-            marker_len = 8
-            marker_color = (255, 255, 0)
+            # Draw cleaner L-shaped corner brackets (no full rectangle)
+            corner_len = 10  # Length of each corner bracket line
+
             # Top-left corner
-            draw.line([zone_x1, zone_y1, zone_x1 + marker_len, zone_y1], fill=marker_color, width=2)
-            draw.line([zone_x1, zone_y1, zone_x1, zone_y1 + marker_len], fill=marker_color, width=2)
+            draw.line([zone_x1, zone_y1, zone_x1 + corner_len, zone_y1], fill=box_color, width=2)
+            draw.line([zone_x1, zone_y1, zone_x1, zone_y1 + corner_len], fill=box_color, width=2)
+
             # Top-right corner
-            draw.line([zone_x2, zone_y1, zone_x2 - marker_len, zone_y1], fill=marker_color, width=2)
-            draw.line([zone_x2, zone_y1, zone_x2, zone_y1 + marker_len], fill=marker_color, width=2)
+            draw.line([zone_x2 - corner_len, zone_y1, zone_x2, zone_y1], fill=box_color, width=2)
+            draw.line([zone_x2, zone_y1, zone_x2, zone_y1 + corner_len], fill=box_color, width=2)
+
             # Bottom-left corner
-            draw.line([zone_x1, zone_y2, zone_x1 + marker_len, zone_y2], fill=marker_color, width=2)
-            draw.line([zone_x1, zone_y2, zone_x1, zone_y2 - marker_len], fill=marker_color, width=2)
+            draw.line([zone_x1, zone_y2 - corner_len, zone_x1, zone_y2], fill=box_color, width=2)
+            draw.line([zone_x1, zone_y2, zone_x1 + corner_len, zone_y2], fill=box_color, width=2)
+
             # Bottom-right corner
-            draw.line([zone_x2, zone_y2, zone_x2 - marker_len, zone_y2], fill=marker_color, width=2)
-            draw.line([zone_x2, zone_y2, zone_x2, zone_y2 - marker_len], fill=marker_color, width=2)
+            draw.line([zone_x2, zone_y2 - corner_len, zone_x2, zone_y2], fill=box_color, width=2)
+            draw.line([zone_x2 - corner_len, zone_y2, zone_x2, zone_y2], fill=box_color, width=2)
         
         # Convert back to numpy
         return np.array(img)
     
     def on_focus_pressed(self):
-        """Focus button pressed - lock AF and AE"""
+        """Focus button pressed - exit gallery OR confirm focus zone OR trigger AF and lock"""
         print("\n[FOCUS DEBUG] Button pressed!")
-        print("[FOCUS] Locking focus and exposure...")
-        self.focus_locked = True
 
-        # Get current camera metadata
-        metadata = self.camera.capture_metadata()
+        # If in gallery mode, exit gallery
+        if self.gallery_mode:
+            print("[GALLERY] Exiting gallery mode (focus button pressed)")
+            self._exit_gallery()
+            # Short beep for exit
+            self.buzzer.value = 0.5
+            time.sleep(0.05)
+            self.buzzer.value = 0
+            return
 
-        # Lock current AF and AE values
-        self.camera.set_controls({
-            "AfMode": 0,  # Manual focus mode
-            "AeEnable": False  # Disable auto-exposure
-        })
+        # If in focus zone selection mode, confirm and lock the zone
+        if self.focus_zone_enabled:
+            print(f"\n[FOCUS ZONE] Confirmed and locking zone ({self.focus_zone_x}, {self.focus_zone_y})")
+            self._apply_focus_zone()  # Apply the selected zone
+            self.focus_zone_enabled = False  # Exit selection mode
+            self.focus_zone_locked = True  # Lock the zone (persists on screen)
+            # Confirmation beep (longer to indicate zone is locked)
+            self.buzzer.value = 0.5
+            time.sleep(0.15)
+            self.buzzer.value = 0
+            return
 
-        # Short beep for focus lock
-        print("[FOCUS] Beeping...")
-        self.buzzer.value = 0.5
-        time.sleep(0.05)
-        self.buzzer.value = 0
+        # Trigger autofocus cycle and wait for completion
+        print("[FOCUS] Triggering autofocus...")
+
+        try:
+            # Show yellow circle to indicate focusing in progress
+            self.focus_feedback = 'focusing'
+            self.focus_feedback_time = time.time()
+
+            # If a focus zone is locked, apply it before triggering AF
+            if self.focus_zone_locked:
+                print("[FOCUS] Applying locked focus zone before AF trigger")
+                self._apply_focus_zone()
+
+            # Set to auto mode if not already
+            self.camera.set_controls({"AfMode": 2})  # Continuous AF
+            time.sleep(0.05)
+
+            # Trigger AF scan
+            self.camera.set_controls({"AfTrigger": 0})
+
+            # Wait for focus to complete (max 3 seconds)
+            focus_achieved = False
+            start_time = time.time()
+            focus_timeout = 3.0  # 3 second timeout
+
+            while time.time() - start_time < focus_timeout:
+                metadata = self.camera.capture_metadata()
+                af_state = metadata.get("AfState", 0)
+                # AfState: 0=Inactive, 1=Passive Scan, 2=Passive Focused, 3=Active Scan, 4=Focused, 5=Failed
+
+                if af_state in [2, 4]:  # Focused states
+                    focus_achieved = True
+                    print(f"[FOCUS] Focus achieved! State: {af_state}")
+                    break
+                elif af_state == 5:  # Failed
+                    print("[FOCUS] Focus failed")
+                    break
+
+                time.sleep(0.05)
+
+            # Complete AF trigger cycle
+            self.camera.set_controls({"AfTrigger": 1})
+
+            # Lock focus and exposure
+            self.focus_locked = True
+            self.camera.set_controls({
+                "AfMode": 0,  # Manual focus mode (locks current position)
+                "AeEnable": False  # Disable auto-exposure
+            })
+
+            # Set visual feedback and beep based on result
+            if focus_achieved:
+                print("[FOCUS] Focus locked - showing green circle")
+                self.focus_feedback = 'success'
+                self.focus_feedback_time = time.time()
+                # Single beep for success
+                self.buzzer.value = 0.5
+                time.sleep(0.1)
+                self.buzzer.value = 0
+            else:
+                # Focus timeout or failure
+                print("[FOCUS] Focus timeout/failed - showing red dot with AF ERROR")
+                self.focus_feedback = 'error'
+                self.focus_feedback_time = time.time()
+                # Double beep for failure
+                self.buzzer.value = 0.3
+                time.sleep(0.05)
+                self.buzzer.value = 0
+                time.sleep(0.05)
+                self.buzzer.value = 0.3
+                time.sleep(0.05)
+                self.buzzer.value = 0
+
+        except Exception as e:
+            print(f"[FOCUS] Error during autofocus: {e}")
+            # Show error feedback
+            self.focus_feedback = 'error'
+            self.focus_feedback_time = time.time()
+            # Error beep
+            self.buzzer.value = 0.5
+            time.sleep(0.2)
+            self.buzzer.value = 0
 
     def on_focus_released(self):
         """Focus button released - unlock AF and AE"""
@@ -490,18 +747,30 @@ class CameraViewfinder:
         print("[FOCUS] Unlocking focus and exposure...")
         self.focus_locked = False
 
+        # Clear focus feedback immediately on release
+        self.focus_feedback = None
+        self.focus_feedback_time = 0
+
         # Re-enable auto modes
         self.camera.set_controls({
             "AfMode": 2,  # Continuous auto-focus
             "AeEnable": True
         })
 
+        # If a focus zone is locked, reapply it after re-enabling AF
+        if self.focus_zone_locked:
+            print("[FOCUS] Reapplying locked focus zone after release")
+            self._apply_focus_zone()
+
     def on_joy_left_pressed(self):
         """Joystick LEFT pressed - GPIO 19 - Open gallery OR previous photo OR move focus zone"""
         if self.gallery_mode:
             # In gallery mode, go to previous photo
+            self.gallery_delete_confirm = False  # Reset delete confirmation
+            old_index = self.gallery_index
             self.gallery_index = (self.gallery_index - 1) % len(self.gallery_photos)
-            print(f"\n[GALLERY] Previous photo ({self.gallery_index + 1}/{len(self.gallery_photos)})")
+            print(f"\n[GALLERY] Previous photo: index {old_index} -> {self.gallery_index} ({self.gallery_index + 1}/{len(self.gallery_photos)})")
+            print(f"[GALLERY] Photo: {self.gallery_photos[self.gallery_index].name}")
             self._display_gallery_photo()
         elif self.focus_zone_enabled:
             # In focus zone mode, move left
@@ -535,34 +804,134 @@ class CameraViewfinder:
         self.buzzer.value = 0
 
     def on_joy_switch_pressed(self):
-        """Joystick SWITCH pressed - GPIO 20 - Exit gallery OR confirm focus zone"""
+        """Joystick SWITCH pressed - GPIO 20 - Exit gallery OR confirm/reset focus zone"""
         if self.gallery_mode:
             # Exit gallery mode
             print("\n[GALLERY] Exiting gallery mode")
             self._exit_gallery()
+            # Short beep
+            self.buzzer.value = 0.3
+            time.sleep(0.05)
+            self.buzzer.value = 0
         elif self.focus_zone_enabled:
-            # In focus zone mode, pressing switch confirms and exits
-            print(f"\n[FOCUS ZONE] Confirmed zone ({self.focus_zone_x}, {self.focus_zone_y})")
-            self.focus_zone_enabled = False
+            # In focus zone mode, pressing switch confirms, locks, and exits selection mode
+            print(f"\n[FOCUS ZONE] Confirmed and locking zone ({self.focus_zone_x}, {self.focus_zone_y})")
+            self._apply_focus_zone()  # Apply the selected zone
+            self.focus_zone_enabled = False  # Exit selection mode
+            self.focus_zone_locked = True  # Lock the zone (persists on screen)
+            # Confirmation beep (longer to indicate zone is locked)
+            self.buzzer.value = 0.5
+            time.sleep(0.15)
+            self.buzzer.value = 0
+        elif self.focus_zone_locked:
+            # If zone is locked, pressing CENTER resets to default (center)
+            print("\n[FOCUS ZONE] Reset to default (center)")
+            self.focus_zone_locked = False
+            self.focus_zone_x = 2  # Reset to center
+            self.focus_zone_y = 2
+            # Reset to default AF mode with auto metering (full frame)
+            try:
+                self.camera.set_controls({
+                    "AfMode": 2,      # Continuous AF
+                    "AfMetering": 1   # Auto metering (full frame) instead of windows
+                })
+                print("[FOCUS ZONE] AF window reset to auto (full frame)")
+            except:
+                pass
+            # Triple beep for reset
+            for _ in range(3):
+                self.buzzer.value = 0.3
+                time.sleep(0.04)
+                self.buzzer.value = 0
+                time.sleep(0.04)
         else:
             print("\n[JOYSTICK DEBUG] SWITCH pressed (GPIO 20) - No action")
-        # Short beep
-        self.buzzer.value = 0.3
-        time.sleep(0.05)
-        self.buzzer.value = 0
+            # Short beep
+            self.buzzer.value = 0.3
+            time.sleep(0.05)
+            self.buzzer.value = 0
 
     def on_joy_down_pressed(self):
-        """Joystick DOWN pressed - GPIO 26 - Activate focus zones OR move down in gallery"""
+        """Joystick DOWN pressed - GPIO 26 - Delete photo in gallery OR toggle focus zone selection"""
         if self.gallery_mode:
-            # In gallery mode, do nothing (or could delete photo, etc.)
-            print("\n[JOYSTICK DEBUG] DOWN pressed in gallery mode - No action")
+            # In gallery mode, handle delete confirmation
+            if self.gallery_photos and self.gallery_index < len(self.gallery_photos):
+                if not self.gallery_delete_confirm:
+                    # First press - show confirmation
+                    print("\n[GALLERY] Delete confirmation requested")
+                    self.gallery_delete_confirm = True
+                    self._display_gallery_photo()  # Redisplay with DELETE? overlay
+                    # Double beep for confirmation prompt
+                    self.buzzer.value = 0.3
+                    time.sleep(0.05)
+                    self.buzzer.value = 0
+                    time.sleep(0.05)
+                    self.buzzer.value = 0.3
+                    time.sleep(0.05)
+                    self.buzzer.value = 0
+                else:
+                    # Second press - actually delete
+                    photo_to_delete = self.gallery_photos[self.gallery_index]
+                    print(f"\n[GALLERY] Deleting photo: {photo_to_delete.name}")
+
+                    try:
+                        # Delete the file
+                        photo_to_delete.unlink()
+
+                        # Remove from gallery list
+                        self.gallery_photos.pop(self.gallery_index)
+
+                        # Update photo counter
+                        self.photos_taken = len(list(PHOTO_DIR.glob("*.jpg")))
+                        self.photos_remaining = 9999 - self.photos_taken
+
+                        # Reset confirmation state
+                        self.gallery_delete_confirm = False
+
+                        # If no more photos, exit gallery
+                        if not self.gallery_photos:
+                            print("[GALLERY] No more photos, exiting gallery")
+                            self._exit_gallery()
+                        else:
+                            # Adjust index if we deleted the last photo
+                            if self.gallery_index >= len(self.gallery_photos):
+                                self.gallery_index = len(self.gallery_photos) - 1
+
+                            # Display next/previous photo
+                            self._display_gallery_photo()
+
+                        # Triple beep to confirm deletion
+                        for _ in range(3):
+                            self.buzzer.value = 0.5
+                            time.sleep(0.05)
+                            self.buzzer.value = 0
+                            time.sleep(0.05)
+
+                        print(f"[GALLERY] Photo deleted. Remaining photos: {len(self.gallery_photos)}")
+
+                    except Exception as e:
+                        print(f"[GALLERY] Error deleting photo: {e}")
+                        self.gallery_delete_confirm = False
+                        # Error beep
+                        self.buzzer.value = 0.5
+                        time.sleep(0.2)
+                        self.buzzer.value = 0
+            else:
+                print("\n[GALLERY] No photo to delete")
+                self.buzzer.value = 0.3
+                time.sleep(0.05)
+                self.buzzer.value = 0
         elif self.focus_zone_enabled:
-            # In focus zone mode, move down
+            # In focus zone selection mode, move down
             self.focus_zone_y = min(self.focus_zones_grid - 1, self.focus_zone_y + 1)
             print(f"\n[FOCUS ZONE] Moved DOWN to position ({self.focus_zone_x}, {self.focus_zone_y})")
             self._apply_focus_zone()
+            # Short beep
+            self.buzzer.value = 0.3
+            time.sleep(0.05)
+            self.buzzer.value = 0
         else:
-            # Activate focus zone mode
+            # Activate focus zone selection mode (works whether locked or not)
             self.focus_zone_enabled = True
             print(f"\n[FOCUS ZONE] ENABLED at position ({self.focus_zone_x}, {self.focus_zone_y})")
             self._apply_focus_zone()
@@ -574,18 +943,16 @@ class CameraViewfinder:
             self.buzzer.value = 0.3
             time.sleep(0.05)
             self.buzzer.value = 0
-            return
-        # Short beep
-        self.buzzer.value = 0.3
-        time.sleep(0.05)
-        self.buzzer.value = 0
 
     def on_joy_right_pressed(self):
         """Joystick RIGHT pressed - GPIO 21 - Next photo OR move focus zone right"""
         if self.gallery_mode:
             # In gallery mode, go to next photo
+            self.gallery_delete_confirm = False  # Reset delete confirmation
+            old_index = self.gallery_index
             self.gallery_index = (self.gallery_index + 1) % len(self.gallery_photos)
-            print(f"\n[GALLERY] Next photo ({self.gallery_index + 1}/{len(self.gallery_photos)})")
+            print(f"\n[GALLERY] Next photo: index {old_index} -> {self.gallery_index} ({self.gallery_index + 1}/{len(self.gallery_photos)})")
+            print(f"[GALLERY] Photo: {self.gallery_photos[self.gallery_index].name}")
             self._display_gallery_photo()
         elif self.focus_zone_enabled:
             self.focus_zone_x = min(self.focus_zones_grid - 1, self.focus_zone_x + 1)
@@ -601,8 +968,8 @@ class CameraViewfinder:
     def _open_gallery(self):
         """Enter gallery mode to view photos on the display"""
         try:
-            # Get list of photos
-            self.gallery_photos = sorted(PHOTO_DIR.glob("PICAM_*.jpg"), reverse=True)
+            # Get list of photos (oldest first, newest last)
+            self.gallery_photos = sorted(PHOTO_DIR.glob("PICAM_*.jpg"), reverse=False)
 
             if len(self.gallery_photos) == 0:
                 print("[GALLERY] No photos found")
@@ -616,8 +983,11 @@ class CameraViewfinder:
 
             # Enter gallery mode
             self.gallery_mode = True
-            self.gallery_index = 0
+            self.gallery_index = len(self.gallery_photos) - 1  # Start at newest photo (last in list)
             print(f"[GALLERY] Entered gallery mode - {len(self.gallery_photos)} photos")
+            print(f"[GALLERY] Photo list:")
+            for i, photo in enumerate(self.gallery_photos):
+                print(f"  [{i}] {photo.name}")
             self._display_gallery_photo()
 
         except Exception as e:
@@ -632,14 +1002,15 @@ class CameraViewfinder:
             photo_path = self.gallery_photos[self.gallery_index]
             print(f"[GALLERY] Displaying {photo_path.name} ({self.gallery_index + 1}/{len(self.gallery_photos)})")
 
-            # Load and resize image to fit display
+            # OPTIMIZATION: Use draft mode for fast loading of JPEG at reduced resolution
+            # This reads only the data needed for the target size, much faster than full decode
             img = Image.open(photo_path)
 
             # Calculate aspect ratios
             img_aspect = img.width / img.height
             display_aspect = DISPLAY_WIDTH / DISPLAY_HEIGHT
 
-            # Resize to fit display while maintaining aspect ratio
+            # Calculate target size
             if img_aspect > display_aspect:
                 # Image is wider - fit to width
                 new_width = DISPLAY_WIDTH
@@ -649,7 +1020,16 @@ class CameraViewfinder:
                 new_height = DISPLAY_HEIGHT
                 new_width = int(DISPLAY_HEIGHT * img_aspect)
 
-            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            # Use draft mode for JPEG - loads only what's needed for thumbnail
+            # This can be 8x faster than loading full resolution
+            try:
+                img.draft('RGB', (new_width * 2, new_height * 2))  # Request 2x for quality
+            except:
+                pass  # Draft mode not supported for this format, continue normally
+
+            # OPTIMIZATION: Use BILINEAR instead of LANCZOS
+            # For tiny 284x76 display, BILINEAR is 3-4x faster and visually identical
+            img = img.resize((new_width, new_height), Image.Resampling.BILINEAR)
 
             # Create canvas and center image
             canvas = np.zeros((DISPLAY_HEIGHT, DISPLAY_WIDTH, 3), dtype=np.uint8)
@@ -666,6 +1046,21 @@ class CameraViewfinder:
             # Draw photo info overlay
             info_text = f"{self.gallery_index + 1}/{len(self.gallery_photos)}"
             draw.text((5, 5), info_text, fill=(255, 255, 255))
+
+            # Draw DELETE? confirmation overlay if in delete confirmation mode
+            if self.gallery_delete_confirm:
+                # Draw semi-transparent background for visibility
+                delete_text = "DELETE?"
+                text_width = len(delete_text) * 8  # Approximate width
+                text_x = (DISPLAY_WIDTH - text_width) // 2
+                text_y = DISPLAY_HEIGHT // 2 - 6
+
+                # Draw background rectangle
+                draw.rectangle([text_x - 5, text_y - 2, text_x + text_width + 5, text_y + 12],
+                             fill=(0, 0, 0), outline=(255, 0, 0), width=2)
+
+                # Draw text in red
+                draw.text((text_x, text_y), delete_text, fill=(255, 0, 0))
 
             # Display on screen
             self.display.show_image(np.array(canvas_img))
@@ -684,25 +1079,28 @@ class CameraViewfinder:
         """Apply the selected focus zone to camera AF"""
         # Calculate focus window based on zone position
         # Focus window is in normalized coordinates (0.0 - 1.0)
-        zone_width = 1.0 / self.focus_zones_grid
-        zone_height = 1.0 / self.focus_zones_grid
+        zone_width_norm = 1.0 / self.focus_zones_grid
+        zone_height_norm = 1.0 / self.focus_zones_grid
 
-        # Calculate window bounds
-        x_start = self.focus_zone_x * zone_width
-        y_start = self.focus_zone_y * zone_height
-        x_end = x_start + zone_width
-        y_end = y_start + zone_height
+        # Calculate window bounds in normalized coordinates
+        x_start = self.focus_zone_x * zone_width_norm
+        y_start = self.focus_zone_y * zone_height_norm
 
-        # Set AF window (libcamera uses (x, y, width, height) format)
+        # Set AF window (libcamera uses (x, y, width, height) format in 0-65535 range)
         # AfMetering window controls where the camera focuses
         try:
+            af_window = (
+                int(x_start * 65535),           # x position
+                int(y_start * 65535),           # y position
+                int(zone_width_norm * 65535),   # width
+                int(zone_height_norm * 65535)   # height
+            )
+
             self.camera.set_controls({
-                "AfMode": 2,  # Continuous AF
                 "AfMetering": 0,  # Windows mode (uses AfWindows)
-                "AfWindows": [(int(x_start * 65535), int(y_start * 65535),
-                              int((x_end - x_start) * 65535), int((y_end - y_start) * 65535))]
+                "AfWindows": [af_window]
             })
-            print(f"[FOCUS ZONE] AF window set to zone ({self.focus_zone_x}, {self.focus_zone_y})")
+            print(f"[FOCUS ZONE] AF window set to zone ({self.focus_zone_x}, {self.focus_zone_y}): {af_window}")
         except Exception as e:
             print(f"[FOCUS ZONE] Warning: Could not set AF window: {e}")
             # Fallback to manual control if AF windowing not supported
@@ -734,28 +1132,32 @@ class CameraViewfinder:
             # Switch to high resolution mode
             print("[SHUTTER] Switching to high-res mode (4608x2592)...")
             self.camera.stop()
-            time.sleep(0.1)
+            time.sleep(0.2)  # Increased wait for proper cleanup
 
             highrez_config = self.camera.create_still_configuration(
                 main={"size": (4608, 2592), "format": "RGB888"},
                 lores=None,
                 display=None,
-                buffer_count=2,
+                buffer_count=1,  # Reduced from 2 to save memory
                 queue=False,
                 transform=Transform(vflip=True, hflip=True)
             )
             self.camera.configure(highrez_config)
             self.camera.start()
-            time.sleep(0.3)  # Allow camera to stabilize
+            time.sleep(0.5)  # Increased stabilization time
 
             # Capture high resolution image
             self.camera.capture_file(str(filename))
             print(f"[SHUTTER] High-res photo saved: {filename}")
 
-            # Switch back to preview mode
+            # CRITICAL: Stop camera immediately after capture to free memory
             print("[SHUTTER] Switching back to preview mode...")
             self.camera.stop()
-            time.sleep(0.1)
+            time.sleep(0.2)  # Allow cleanup
+
+            # Force garbage collection to free memory from high-res buffers
+            import gc
+            gc.collect()
 
             preview_config = self.camera.create_preview_configuration(
                 main={"size": (PREVIEW_WIDTH, PREVIEW_HEIGHT), "format": "RGB888"}
@@ -856,7 +1258,15 @@ class CameraViewfinder:
                             # Update camera info from metadata
                             self.current_iso = metadata.get("AnalogueGain", 0) * metadata.get("DigitalGain", 1.0) * 100
                             self.current_shutter_speed = metadata.get("ExposureTime", 0)
-                            self.current_focus_distance = metadata.get("FocusFoM", 0)
+                            # LensPosition: 0.0 = infinity, 10.0+ = close focus
+                            # Convert to approximate distance in meters
+                            lens_pos = metadata.get("LensPosition", 0)
+                            if lens_pos > 0:
+                                # Approximate inverse relationship: distance ≈ 1 / lens_position
+                                # Calibrated for typical camera module behavior
+                                self.current_focus_distance = 10.0 / lens_pos if lens_pos > 0.1 else 100.0
+                            else:
+                                self.current_focus_distance = 0
 
                             # Manual exposure control - adjust gain to maintain brightness
                             if self.manual_exposure and not self.focus_locked:

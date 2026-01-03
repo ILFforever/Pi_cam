@@ -121,6 +121,39 @@ Each camera script supports different resolutions and configurations. Edit the `
 
 The DNG camera uses GPIO pin 29 for LED control. Change `led_pin` in `examples/dng_camera_led.py` to use a different pin.
 
+## Service Management
+
+The camera viewfinder runs as a systemd service on the Raspberry Pi.
+
+### Restart the Camera Service
+
+```bash
+# Restart the service (applies code changes)
+sudo systemctl restart camera-viewfinder.service
+
+# Check service status
+sudo systemctl status camera-viewfinder.service
+
+# View real-time logs
+sudo journalctl -u camera-viewfinder.service -f
+```
+
+### Other Service Commands
+
+```bash
+# Stop the service
+sudo systemctl stop camera-viewfinder.service
+
+# Start the service
+sudo systemctl start camera-viewfinder.service
+
+# View recent logs (last 100 lines)
+sudo journalctl -u camera-viewfinder.service -n 100
+
+# Check if service is enabled on boot
+sudo systemctl is-enabled camera-viewfinder.service
+```
+
 ## Troubleshooting
 
 ### Camera Not Detected
